@@ -1,0 +1,1517 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="referrer" content="no-referrer">
+<title>POPOPX Bot Studio</title>
+<script type="application/json" id="i18n-catalog">__I18N_CATALOG_JSON__</script>
+<style>
+:root{
+  --bg:#05070a;--bg2:#070a0f;--panel:#0b0f16;--panel2:#0e131b;--sunk:#080b10;
+  --line:#1a222e;--line2:#26313f;--txt:#dbe5ef;--mut:#8496a8;--dim:#5c6b7c;
+  --acc:#25e8c6;--acc-d:#0f9c86;--glow:rgba(37,232,198,.28);--warn:#f2b53c;--bad:#ff6b60;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans","Helvetica Neue",Arial,sans-serif}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font:14px/1.55 var(--sans);-webkit-text-size-adjust:100%}
+h1,h2,h3{margin:0;font-weight:600}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+button,input,select,textarea{font:inherit;color:inherit}
+::selection{background:var(--acc-d);color:#04070a}
+.wrap{display:flex;flex-direction:column;min-height:100vh}
+.top{position:sticky;top:0;z-index:20;display:flex;align-items:stretch;
+  border-bottom:1px solid var(--line);background:rgba(7,10,15,.95)}
+.brand{display:flex;align-items:center;gap:11px;padding:11px 18px;border-right:1px solid var(--line)}
+.mark{width:26px;height:26px;flex:none;color:var(--acc)}
+.b1{font-size:13px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;white-space:nowrap}
+.b2{font-size:11px;color:var(--dim);max-width:32ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.strip{display:flex;flex:1;min-width:0;overflow:hidden}
+.cell{display:flex;flex-direction:column;justify-content:center;gap:2px;padding:9px 16px;border-right:1px solid var(--line);min-width:0}
+.cell .k{font:10px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+.cell .v{font-size:12px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cell .v.on{color:var(--acc)}
+.cell .v.off{color:var(--warn)}
+.tools{display:flex;align-items:center;gap:9px;padding:0 16px;margin-left:auto}
+.lbl{font:10px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+.body{display:flex;flex:1;min-height:0}
+.rail{width:238px;flex:none;border-right:1px solid var(--line);padding:14px 0 10px;display:flex;flex-direction:column;background:var(--bg2)}
+.nav{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1px}
+.nav button{display:flex;align-items:center;gap:10px;width:100%;padding:10px 18px;background:none;border:0;
+  border-left:2px solid transparent;color:var(--mut);font-size:13px;text-align:left;cursor:pointer;transition:color .12s,background .12s}
+.nav button:hover{color:var(--txt);background:#0d131b}
+.nav button svg{width:15px;height:15px;flex:none;opacity:.7}
+.nav button[aria-current="page"]{color:var(--acc);border-left-color:var(--acc);background:linear-gradient(90deg,rgba(37,232,198,.09),transparent 60%)}
+.nav button[aria-current="page"] svg{opacity:1}
+.railfoot{margin-top:auto;padding:14px 18px 0;border-top:1px solid var(--line);font:10px/1.6 var(--mono);color:var(--dim)}
+.views{flex:1;min-width:0;padding:18px 22px 46px;overflow-x:hidden}
+.grid{display:grid;gap:14px}
+.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.card{border:1px solid var(--line);background:var(--panel)}
+.card>header{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel2)}
+.card>header h2{font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--mut);font-weight:600}
+.card>header .sp{margin-left:auto;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.card .bd{padding:14px}
+.card .bd.np{padding:0}
+.card.live{border-color:rgba(37,232,198,.55);box-shadow:0 0 0 1px rgba(37,232,198,.15),0 0 26px -10px var(--glow)}
+.metric{padding:12px 14px}
+.metric .k{font:10px/1 var(--mono);letter-spacing:.13em;text-transform:uppercase;color:var(--dim)}
+.metric .n{font-family:var(--mono);font-size:34px;line-height:1.15;font-variant-numeric:tabular-nums;display:block}
+.metric .s{font:11px/1.4 var(--mono);color:var(--dim)}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border:1px solid var(--line2);background:#10161f;
+  color:var(--txt);font-size:12px;cursor:pointer;transition:border-color .12s,color .12s;text-decoration:none}
+.btn:hover{border-color:var(--acc-d);color:var(--acc)}
+.btn:active{transform:translateY(1px)}
+.btn.pri{background:rgba(37,232,198,.1);border-color:var(--acc-d);color:var(--acc)}
+.btn.dgr:hover{border-color:var(--bad);color:var(--bad)}
+.btn.sm{padding:3px 8px;font-size:11px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.fld{display:flex;flex-direction:column;gap:5px;min-width:0}
+.fld>span{font:10px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+input,select,textarea{background:var(--sunk);border:1px solid var(--line2);color:var(--txt);padding:7px 9px;font-size:13px;min-width:0;width:100%}
+input[type=checkbox]{width:15px;height:15px;padding:0;accent-color:var(--acc)}
+input.mono,textarea.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+textarea{resize:vertical;min-height:64px}
+select{appearance:none;padding-right:26px;background-image:linear-gradient(45deg,transparent 50%,var(--mut) 50%),linear-gradient(135deg,var(--mut) 50%,transparent 50%);
+  background-position:calc(100% - 14px) 13px,calc(100% - 9px) 13px;background-size:5px 5px;background-repeat:no-repeat}
+input:focus,select:focus,textarea:focus{border-color:var(--acc-d);outline:none;box-shadow:0 0 0 1px var(--glow)}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font:400 10px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--dim);padding:8px 10px;border-bottom:1px solid var(--line)}
+td{padding:8px 10px;border-bottom:1px solid #131a23;vertical-align:middle;font-size:13px}
+tbody tr:hover{background:#0d131b}
+.st{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--mut);white-space:nowrap}
+.st b{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
+.st[data-s="running"],.st[data-s="ok"],.st[data-s="loaded"]{color:var(--acc)}
+.st[data-s="starting"],.st[data-s="partial"],.st[data-s="enabled"]{color:var(--warn)}
+.st[data-s="error"],.st[data-s="failed"],.st[data-s="disabled"]{color:var(--bad)}
+.trend{display:flex;align-items:flex-end;gap:5px;height:104px}
+.trend i{flex:1;min-height:2px;background:linear-gradient(180deg,var(--acc),rgba(15,156,134,.3));opacity:.85}
+.trend-x{display:flex;gap:5px;margin-top:6px;font:10px/1.3 var(--mono);color:var(--dim)}
+.trend-x span{flex:1;text-align:center;overflow:hidden}
+.pill{display:inline-block;padding:2px 7px;border:1px solid var(--line2);font:10px/1.6 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
+.pill.acc{border-color:var(--acc-d);color:var(--acc)}
+.pill.warn{border-color:var(--warn);color:var(--warn)}
+.note{border-left:2px solid var(--warn);background:rgba(242,181,60,.07);padding:9px 12px;font-size:12px;color:#e9ddc4;margin:0 0 8px}
+.note.bad{border-left-color:var(--bad);background:rgba(255,107,96,.08);color:#f1d5d2}
+pre{margin:0;padding:11px 13px;background:var(--sunk);border:1px solid var(--line);overflow:auto;
+  font:12px/1.5 var(--mono);color:#b8cadb;max-height:300px;tab-size:2;white-space:pre-wrap;overflow-wrap:anywhere}
+.kv{display:grid;grid-template-columns:minmax(110px,170px) minmax(0,1fr);gap:5px 14px;font-size:12px;align-items:baseline;margin:0}
+.kv dt{font:10px/1.5 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.kv dd{margin:0;font-family:var(--mono);word-break:break-all}
+.list{list-style:none;margin:0;padding:0}
+.list>li{padding:9px 0;border-bottom:1px solid #131a23;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.list>li:last-child{border-bottom:0}
+.flow{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #131a23;flex-wrap:wrap}
+.flow:last-child{border-bottom:0}
+.node{border:1px solid var(--line2);background:var(--sunk);padding:5px 9px;font:11px/1.4 var(--mono);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.node.tgt{border-color:var(--acc-d);color:var(--acc)}
+.link{flex:1;min-width:30px;height:1px;background:var(--line2);position:relative}
+.link::after{content:"";position:absolute;right:-1px;top:-4px;width:8px;height:8px;border-top:1px solid var(--acc-d);border-right:1px solid var(--acc-d);transform:rotate(45deg)}
+.meta{font:11px/1.5 var(--mono);color:var(--dim)}
+.empty{padding:16px;color:var(--mut);border:1px dashed var(--line2);background:var(--sunk);margin:0}
+.hd{display:flex;align-items:center;gap:12px;margin:0 0 14px;padding-bottom:9px;border-bottom:1px solid var(--line)}
+.hd h1{font-size:14px;letter-spacing:.13em;text-transform:uppercase}
+.hd .sp{margin-left:auto;font:11px/1 var(--mono);color:var(--dim)}
+.sect{margin-top:16px}
+.gap{gap:11px}
+#toasts{position:fixed;right:16px;bottom:16px;z-index:60;display:flex;flex-direction:column;gap:8px;max-width:min(420px,86vw)}
+.toast{border:1px solid var(--line2);background:#0d141d;padding:9px 12px;font-size:12px;display:flex;gap:9px;align-items:baseline;box-shadow:0 8px 24px -12px #000;transition:opacity .25s}
+.toast .tag{font:10px/1.6 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--acc);flex:none;display:none}
+.toast.ok .tag:first-child,.toast.err .tag:nth-child(2){display:inline}
+.toast.err{border-color:rgba(255,107,96,.5)}
+.toast.err .tag{color:var(--bad)}
+.toast .msg{color:var(--mut);overflow-wrap:anywhere}
+dialog{border:1px solid var(--line2);background:var(--panel);color:var(--txt);padding:0;max-width:520px;width:92vw}
+dialog::backdrop{background:rgba(3,5,8,.78)}
+dialog>form{padding:16px 18px}
+dialog h3{padding:12px 18px;margin:0;border-bottom:1px solid var(--line);background:var(--panel2);font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--mut)}
+dialog .foot{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+#q-img{display:block;margin:12px auto 0;background:#fff;padding:10px;width:min(230px,60vw)}
+details.cfg>summary{cursor:pointer;padding:9px 0;color:var(--mut);font:11px/1.5 var(--mono);letter-spacing:.08em;text-transform:uppercase;list-style:none}
+details.cfg>summary::before{content:"+ ";color:var(--acc-d)}
+details.cfg[open]>summary::before{content:"− "}
+@media(max-width:1180px){.g4{grid-template-columns:repeat(2,minmax(0,1fr))}.g3{grid-template-columns:1fr}}
+@media(max-width:900px){
+  .body{flex-direction:column}
+  .rail{width:auto;border-right:0;border-bottom:1px solid var(--line);padding:0;position:sticky;top:53px;z-index:15}
+  .nav{flex-direction:row;overflow-x:auto}
+  .nav button{border-left:0;border-bottom:2px solid transparent;padding:11px 14px;white-space:nowrap;width:auto}
+  .nav button[aria-current="page"]{border-left:0;border-bottom-color:var(--acc);background:linear-gradient(180deg,transparent,rgba(37,232,198,.09))}
+  .railfoot,.b2{display:none}
+  .brand{border-right:0;padding:9px 12px}
+  .top{flex-wrap:wrap}
+  .strip{order:3;width:100%;border-top:1px solid var(--line)}
+  .cell{padding:7px 12px}
+  .views{padding:14px 12px 40px}}
+@media(max-width:820px){.g2{grid-template-columns:1fr}}
+@media(max-width:560px){.g4,.g2{grid-template-columns:1fr}.tools{padding:0 10px}.metric .n{font-size:26px}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div class="brand">
+    <svg class="mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path fill="none" stroke="currentColor" stroke-width="1.4" d="M4 7h16v10H4z"/>
+      <path fill="currentColor" d="M7.5 10.5h2v3h-2zm7 0h2v3h-2z"/>
+      <path fill="none" stroke="currentColor" stroke-width="1.4" d="M12 3v4M2 12h2M20 12h2"/>
+    </svg>
+    <div>
+      <div class="b1" id="brand-title" data-i18n="app_title">POPOPX Bot Studio</div>
+      <div class="b2" data-i18n="app_tagline">Self-hosted bot factory, auto-reply and message routing</div>
+    </div>
+  </div>
+  <div class="strip" id="strip"></div>
+  <div class="tools">
+    <label class="lbl" for="lang" data-i18n="language">Language</label>
+    <select id="lang"></select>
+    <button type="button" class="btn" id="btn-refresh"><span data-i18n="action_refresh">Refresh</span></button>
+  </div>
+</header>
+
+<div class="body">
+<nav class="rail" aria-labelledby="brand-title">
+  <ul class="nav" id="nav">
+    <li><button type="button" data-view="dashboard" aria-current="page"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1 1h6v6H1zm8 0h6v3H9zM9 5h6v10H9zM1 8h6v7H1z"/></svg><span data-i18n="nav_dashboard">Dashboard</span></button></li>
+    <li><button type="button" data-view="bots"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 3h12v9H2zm3 3v2h1V6zm5 0v2h1V6zM6 13h4v1H6z"/></svg><span data-i18n="nav_bots">Bot factory</span></button></li>
+    <li><button type="button" data-view="rules"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1 2h14v3H1zm1 5h12v2H2zm0 4h8v1H2z"/></svg><span data-i18n="nav_rules">Auto-reply</span></button></li>
+    <li><button type="button" data-view="routing"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1 7h6v2H1zm8-5h6v2H9zm0 10h6v2H9zM8 1h1v14H8z"/></svg><span data-i18n="nav_routing">Routing</span></button></li>
+    <li><button type="button" data-view="plugins"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M5 1v3H3v5h2v4h4v-4h2V4h-2V1z"/></svg><span data-i18n="nav_plugins">Plugins</span></button></li>
+    <li><button type="button" data-view="api"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 3h5v2H2zm0 4h3v2H2zm6-4h6v2H8zm0 8h6v2H8zM2 11h5v2H2z"/></svg><span data-i18n="nav_api">API console</span></button></li>
+    <li><button type="button" data-view="backup"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 2h12v3H2zm1 4h10v8H3zm3 2v2h4V8z"/></svg><span data-i18n="nav_backup">Cold backup</span></button></li>
+  </ul>
+  <div class="railfoot"><span data-i18n="footer">AGPL-3.0-only · no bundled binaries · loopback only</span></div>
+</nav>
+
+<main class="views" id="views">
+
+<section id="v-dashboard" aria-labelledby="h-dash">
+  <div class="hd"><h1 id="h-dash" data-i18n="nav_dashboard">Dashboard</h1><span class="sp mono" id="dash-stamp"></span></div>
+  <div class="grid g4">
+    <div class="card metric"><div class="k" data-i18n="dash_bots">Bots</div><span class="n" id="m-bots">0</span><div class="s" id="m-bots-s">—</div></div>
+    <div class="card metric"><div class="k" data-i18n="dash_running">Running</div><span class="n" id="m-run">0</span><div class="s" id="m-run-s">—</div></div>
+    <div class="card metric"><div class="k" data-i18n="dash_messages">Messages today</div><span class="n" id="m-msg">0</span><div class="s" id="m-msg-s">—</div></div>
+    <div class="card metric"><div class="k" data-i18n="dash_events">Events</div><span class="n" id="m-ev">0</span><div class="s" id="m-ev-s">—</div></div>
+  </div>
+  <div class="grid g2 sect">
+    <div class="card">
+      <header><h2>message_trend · 7d</h2><div class="sp"><span class="pill" id="trend-total">0</span></div></header>
+      <div class="bd"><div class="trend" id="trend"></div><div class="trend-x" id="trend-x"></div></div>
+    </div>
+    <div class="card">
+      <header><h2 data-i18n="nav_plugins">Plugins</h2><div class="sp"><span class="pill" id="ph-count">0</span></div></header>
+      <div class="bd"><ul class="list" id="ph-list"></ul></div>
+    </div>
+  </div>
+  <div class="sect" id="warn-box"></div>
+  <div class="grid g2 sect">
+    <div class="card">
+      <header><h2>GET /api/admin/logs</h2><div class="sp"><button type="button" class="btn sm" id="btn-logs"><span data-i18n="action_refresh">Refresh</span></button></div></header>
+      <div class="bd"><pre id="logs">—</pre></div>
+    </div>
+    <div class="card">
+      <header><h2>GET /api/admin/updates</h2><div class="sp"><button type="button" class="btn sm" id="btn-updates"><span data-i18n="action_refresh">Refresh</span></button></div></header>
+      <div class="bd"><pre id="updates">—</pre></div>
+    </div>
+  </div>
+</section>
+
+<section id="v-bots" hidden aria-labelledby="h-bots">
+  <div class="hd"><h1 id="h-bots" data-i18n="nav_bots">Bot factory</h1><span class="sp mono" id="bots-stamp"></span></div>
+  <div class="card">
+    <header><h2>GET /api/admin/bots</h2><div class="sp"><button type="button" class="btn sm" id="btn-bots"><span data-i18n="action_refresh">Refresh</span></button></div></header>
+    <div class="bd np"><div style="overflow-x:auto"><table>
+      <thead><tr><th>bot_id</th><th><span data-i18n="field_name">Name</span></th><th><span data-i18n="field_port">Control port</span></th>
+        <th><span data-i18n="field_status">Status</span></th><th><span data-i18n="field_token">Bot token</span></th>
+        <th><span data-i18n="action_start">Start</span> · <span data-i18n="action_stop">Stop</span> · <span data-i18n="action_restart">Restart</span></th>
+        <th><span data-i18n="bots_qr">QR code</span></th></tr></thead>
+      <tbody id="bots-rows"></tbody>
+    </table></div></div>
+    <div class="bd" id="bots-empty" hidden><p class="empty" data-i18n="bots_empty">No bot yet — create the first one.</p></div>
+  </div>
+  <div class="grid g2 sect">
+    <div class="card" id="card-new">
+      <header><h2>POST /api/admin/bots</h2></header>
+      <div class="bd"><form id="f-new" class="grid gap">
+        <label class="fld"><span data-i18n="field_name">Name</span><input id="n-name" required data-i18n-attr="placeholder:field_name"></label>
+        <label class="fld"><span data-i18n="field_display_name">Display name</span><input id="n-display" data-i18n-attr="placeholder:field_display_name"></label>
+        <label class="fld"><span>default_locale</span><select id="n-locale"></select></label>
+        <label class="fld"><span data-i18n="field_welcome">Welcome message</span><textarea id="n-welcome" rows="3" data-i18n-attr="placeholder:field_welcome"></textarea></label>
+        <label class="fld"><span data-i18n="field_smp">SMP servers</span><input id="n-smp" class="mono" placeholder="smp1.popopx.im,smp2.popopx.im"></label>
+        <div class="row">
+          <label class="row" for="n-auto"><input type="checkbox" id="n-auto" checked><span class="meta" data-i18n="field_auto_accept">Auto-accept contacts</span></label>
+          <label class="row" for="n-inc"><input type="checkbox" id="n-inc"><span class="meta" data-i18n="field_incognito">Accept incognito</span></label>
+        </div>
+        <p class="meta">accept_incognito: false</p>
+        <div class="row"><button type="submit" class="btn pri"><span data-i18n="action_create">Create bot</span></button></div>
+      </form></div>
+    </div>
+    <div class="card">
+      <header><h2>PATCH /api/admin/bots/{bot_id}</h2></header>
+      <div class="bd"><form id="f-edit" class="grid gap">
+        <label class="fld"><span>bot_id</span><select id="e-bot"></select></label>
+        <label class="fld"><span data-i18n="field_display_name">Display name</span><input id="e-display" data-i18n-attr="placeholder:field_display_name"></label>
+        <label class="fld"><span data-i18n="field_welcome">Welcome message</span><textarea id="e-welcome" rows="3"></textarea></label>
+        <label class="fld"><span>default_locale</span><select id="e-locale"></select></label>
+        <label class="fld"><span data-i18n="field_smp">SMP servers</span><input id="e-smp" class="mono"></label>
+        <div class="row">
+          <label class="row" for="e-auto"><input type="checkbox" id="e-auto" checked><span class="meta" data-i18n="field_auto_accept">Auto-accept contacts</span></label>
+          <label class="row" for="e-inc"><input type="checkbox" id="e-inc"><span class="meta" data-i18n="field_incognito">Accept incognito</span></label>
+        </div>
+        <div class="row"><button type="submit" class="btn pri"><span data-i18n="action_save">Save</span></button>
+          <button type="button" class="btn dgr" id="e-del"><span data-i18n="action_delete">Delete</span></button></div>
+      </form></div>
+    </div>
+  </div>
+</section>
+
+<section id="v-rules" hidden aria-labelledby="h-rules">
+  <div class="hd"><h1 id="h-rules" data-i18n="nav_rules">Auto-reply</h1><span class="sp mono" id="rules-stamp"></span></div>
+  <div class="row">
+    <label class="fld" style="min-width:220px"><span>bot_id</span><select id="r-bot"></select></label>
+    <button type="button" class="btn" id="btn-rules"><span data-i18n="action_refresh">Refresh</span></button>
+  </div>
+  <div class="card sect">
+    <header><h2>GET /api/admin/bots/{bot_id}/rules</h2><div class="sp"><span class="pill" id="r-cmds">commands: —</span></div></header>
+    <div class="bd np"><div style="overflow-x:auto"><table>
+      <thead><tr><th>rule_id</th><th><span data-i18n="field_trigger">Trigger</span></th><th><span data-i18n="field_pattern">Pattern</span></th>
+        <th><span data-i18n="field_reply">Reply</span></th><th><span data-i18n="field_cooldown">Cooldown (s)</span></th><th>priority</th>
+        <th><span data-i18n="field_status">Status</span></th><th>hits</th><th><span data-i18n="action_delete">Delete</span></th></tr></thead>
+      <tbody id="rules-rows"></tbody>
+    </table></div></div>
+    <div class="bd" id="rules-empty" hidden><p class="empty" data-i18n="rules_empty">No reply rules yet.</p></div>
+  </div>
+  <div class="grid g2 sect">
+    <div class="card">
+      <header><h2>POST /api/admin/bots/{bot_id}/rules</h2></header>
+      <div class="bd"><form id="f-rule" class="grid gap">
+        <div class="grid g2 gap">
+          <label class="fld"><span data-i18n="field_trigger">Trigger</span><select id="q-trigger">
+            <option value="exact">exact</option><option value="prefix">prefix</option><option value="regex">regex</option><option value="default">default</option></select></label>
+          <label class="fld"><span data-i18n="field_cooldown">Cooldown (s)</span><input id="q-cool" type="number" min="0" step="1" value="0" class="mono"></label>
+        </div>
+        <label class="fld"><span data-i18n="field_pattern">Pattern</span><input id="q-pattern" class="mono" data-i18n-attr="placeholder:field_pattern"></label>
+        <label class="fld"><span data-i18n="field_reply">Reply</span><textarea id="q-reply" rows="3" data-i18n-attr="placeholder:field_reply"></textarea></label>
+        <div class="row">
+          <label class="fld"><span>priority</span><input id="q-prio" type="number" value="100" step="1" class="mono" style="width:100px"></label>
+          <label class="row" for="q-on" style="gap:7px;align-self:flex-end"><input type="checkbox" id="q-on" checked><span class="meta">enabled</span></label>
+          <button type="submit" class="btn pri" style="margin-left:auto"><span data-i18n="action_save">Save</span></button>
+        </div>
+        <p class="meta">{sender_name} · {time} · {bot_name}</p>
+      </form></div>
+    </div>
+    <div class="card" id="card-preview">
+      <header><h2>POST /api/admin/rules/preview</h2></header>
+      <div class="bd"><form id="f-preview" class="grid gap">
+        <label class="fld"><span>text</span><input id="p-text" data-i18n-attr="placeholder:field_pattern"></label>
+        <div class="row"><button type="submit" class="btn pri"><span data-i18n="action_test">Test</span></button></div>
+      </form><pre id="p-out" class="sect">—</pre></div>
+    </div>
+  </div>
+</section>
+
+<section id="v-routing" hidden aria-labelledby="h-routing">
+  <div class="hd"><h1 id="h-routing" data-i18n="nav_routing">Routing</h1><span class="sp mono" id="rt-stamp"></span></div>
+  <div class="row">
+    <label class="fld" style="min-width:220px"><span>bot_id</span><select id="rt-bot"></select></label>
+    <button type="button" class="btn" id="btn-rt"><span data-i18n="action_refresh">Refresh</span></button>
+  </div>
+  <div class="card sect">
+    <header><h2>GET /api/admin/bots/{bot_id}/routing</h2><div class="sp"><span class="pill" id="rt-groups">known_groups: 0</span></div></header>
+    <div class="bd" id="rt-list"></div>
+    <div class="bd" id="rt-empty" hidden><p class="empty" data-i18n="routing_empty">No routing rules yet.</p></div>
+  </div>
+  <div class="grid g2 sect">
+    <div class="card">
+      <header><h2>POST /api/admin/bots/{bot_id}/routing</h2></header>
+      <div class="bd"><form id="f-route" class="grid gap">
+        <div class="grid g3 gap">
+          <label class="fld"><span>source_type</span><select id="d-src"><option value="any">any</option><option value="direct">direct</option><option value="group">group</option></select></label>
+          <label class="fld"><span>keyword_mode</span><select id="d-mode"><option value="any">any</option><option value="contains">contains</option><option value="exact">exact</option><option value="regex">regex</option></select></label>
+          <label class="fld"><span>target_type</span><select id="d-ttype"><option value="group">group</option><option value="contact">contact</option><option value="broadcast">broadcast</option></select></label>
+        </div>
+        <label class="fld"><span data-i18n="field_target">Target</span>
+          <input id="d-target" class="mono" list="d-groups" data-i18n-attr="placeholder:field_target"><datalist id="d-groups"></datalist></label>
+        <label class="fld"><span data-i18n="field_keywords">Keywords</span><input id="d-keys" data-i18n-attr="placeholder:field_keywords"></label>
+        <label class="fld"><span data-i18n="field_template">Template</span><textarea id="d-tpl" rows="2" data-i18n-attr="placeholder:field_template"></textarea></label>
+        <div class="grid g2 gap">
+          <label class="fld"><span>source_ref</span><input id="d-sref" class="mono"></label>
+          <label class="fld"><span data-i18n="field_cooldown">Cooldown (s)</span><input id="d-cool" type="number" min="0" value="0" class="mono"></label>
+        </div>
+        <div class="row">
+          <label class="row" for="d-quote"><input type="checkbox" id="d-quote" checked><span class="meta" data-i18n="field_quote">Quote original</span></label>
+          <label class="row" for="d-on"><input type="checkbox" id="d-on" checked><span class="meta">enabled</span></label>
+          <button type="submit" class="btn pri" style="margin-left:auto"><span data-i18n="action_save">Save</span></button>
+        </div>
+      </form></div>
+    </div>
+    <div class="card" id="card-rtprev">
+      <header><h2>POST /api/admin/routing/preview</h2></header>
+      <div class="bd"><form id="f-rtprev" class="grid gap">
+        <div class="grid g2 gap">
+          <label class="fld"><span>chat_type</span><select id="v-ctype"><option value="direct">direct</option><option value="group">group</option></select></label>
+          <label class="fld"><span>chat_id</span><input id="v-cid" type="number" value="1" class="mono"></label>
+        </div>
+        <label class="fld"><span>text</span><input id="v-text" data-i18n-attr="placeholder:field_template"></label>
+        <div class="row"><button type="submit" class="btn pri"><span data-i18n="action_test">Test</span></button></div>
+      </form><pre id="v-out" class="sect">—</pre></div>
+    </div>
+  </div>
+</section>
+
+<section id="v-plugins" hidden aria-labelledby="h-plugins">
+  <div class="hd"><h1 id="h-plugins" data-i18n="nav_plugins">Plugins</h1><span class="sp mono" id="pl-stamp"></span></div>
+  <div class="row">
+    <label class="fld" style="min-width:220px"><span>bot_id</span><select id="pl-bot"></select></label>
+    <button type="button" class="btn" id="btn-pl"><span data-i18n="action_refresh">Refresh</span></button>
+  </div>
+  <div class="card sect">
+    <header><h2>PATCH /api/admin/plugins/{plugin_id}</h2><div class="sp">
+      <span class="pill"><span data-i18n="action_enable">Enable</span> · <span data-i18n="action_disable">Disable</span></span>
+      <span class="pill" id="pl-dispatch">dispatches: 0</span><span class="pill" id="pl-fail">failures: 0</span></div></header>
+    <div class="bd" id="pl-list"></div>
+  </div>
+</section>
+
+<section id="v-api" hidden aria-labelledby="h-api">
+  <div class="hd"><h1 id="h-api" data-i18n="nav_api">API console</h1><span class="sp mono" id="api-stamp"></span></div>
+  <div class="card">
+    <header><h2 data-i18n="api_endpoint">Open API base</h2></header>
+    <div class="bd">
+      <p class="meta" style="margin:0 0 12px" data-i18n="api_hint">Send commands with your bot token; see README.</p>
+      <div class="grid g2 gap">
+        <label class="fld"><span data-i18n="api_endpoint">Open API base</span><input id="a-base" class="mono"></label>
+        <label class="fld"><span data-i18n="field_token">Bot token</span><input id="a-token" class="mono" data-i18n-attr="placeholder:field_token"></label>
+      </div>
+      <div class="row sect">
+        <label class="row" for="a-pathform"><input type="checkbox" id="a-pathform"><span class="meta">/api/v1/bot&lt;token&gt;/getMe</span></label>
+        <span class="pill" id="a-preview">—</span>
+      </div>
+    </div>
+  </div>
+  <div class="card sect">
+    <header><h2>curl · /api/v1/&lt;endpoint&gt;</h2><div class="sp"><button type="button" class="btn sm" id="btn-curl"><span data-i18n="action_copy">Copy</span></button></div></header>
+    <div class="bd">
+      <div class="row" id="a-verbs"></div>
+      <div class="grid g3 gap sect">
+        <label class="fld"><span>chat_ref</span><input id="a-ref" class="mono" placeholder="#1234567890"></label>
+        <label class="fld"><span>text</span><input id="a-text" placeholder="hello"></label>
+        <label class="fld"><span>limit</span><input id="a-limit" type="number" value="20" min="1" max="500" class="mono"></label>
+      </div>
+      <label class="fld sect"><span>webhook_url</span><input id="a-hook" class="mono" placeholder="https://example.test/hook"></label>
+      <pre id="a-curl" class="sect">—</pre>
+    </div>
+  </div>
+  <div class="card sect">
+    <header><h2>HTTP status · JSON</h2><div class="sp"><span class="pill" id="a-status">idle</span></div></header>
+    <div class="bd"><pre id="a-out" tabindex="0">—</pre></div>
+  </div>
+</section>
+
+<section id="v-backup" hidden aria-labelledby="h-backup">
+  <div class="hd"><h1 id="h-backup" data-i18n="nav_backup">Cold backup</h1><span class="sp mono" id="bk-stamp"></span></div>
+  <p class="meta" style="margin:0 0 14px" data-i18n="backup_note">Export stops the bot, packs cli-data and settings, then resumes it.</p>
+  <div class="grid g2">
+    <div class="card">
+      <header><h2 data-i18n="backup_export">Export bundle</h2></header>
+      <div class="bd"><form id="f-export" class="grid gap">
+        <label class="fld"><span>bot_id</span><select id="x-bot"></select></label>
+        <label class="fld"><span data-i18n="backup_passphrase">Passphrase (optional)</span><input id="x-pass" type="password" autocomplete="new-password"></label>
+        <label class="row" for="x-inline"><input type="checkbox" id="x-inline" checked><span class="meta">inline: true</span></label>
+        <div class="row"><button type="submit" class="btn pri"><span data-i18n="backup_export">Export bundle</span></button></div>
+      </form><pre id="x-out" class="sect">—</pre></div>
+    </div>
+    <div class="card">
+      <header><h2 data-i18n="backup_import">Restore bundle</h2></header>
+      <div class="bd"><form id="f-import" class="grid gap">
+        <label class="fld"><span>bundle</span><input id="i-file" class="mono" placeholder="/path/to/bot.pbsb"></label>
+        <label class="fld"><span>base64</span><textarea id="i-b64" rows="3" class="mono"></textarea></label>
+        <label class="fld"><span data-i18n="backup_passphrase">Passphrase (optional)</span><input id="i-pass" type="password" autocomplete="new-password"></label>
+        <label class="row" for="i-start"><input type="checkbox" id="i-start"><span class="meta">start: true</span></label>
+        <div class="row"><button type="submit" class="btn pri"><span data-i18n="backup_import">Restore bundle</span></button></div>
+      </form><pre id="i-out" class="sect">—</pre></div>
+    </div>
+  </div>
+  <div class="card sect">
+    <header><h2>GET /api/admin/backups</h2><div class="sp"><button type="button" class="btn sm" id="btn-bk"><span data-i18n="action_refresh">Refresh</span></button></div></header>
+    <div class="bd" id="bk-list"></div>
+  </div>
+  <div class="card sect live" id="card-cfg">
+    <header><h2>GET /api/admin/config</h2><div class="sp"><span class="pill" id="cfg-loop">loopback_only</span>
+      <button type="button" class="btn sm" id="btn-cfg"><span data-i18n="action_refresh">Refresh</span></button></div></header>
+    <div class="bd"><div id="cfg-warn"></div><dl class="kv sect" id="cfg-kv"></dl>
+      <details class="cfg"><summary>example_argv · wrapper_preview</summary><pre id="cfg-argv" class="sect">—</pre></details>
+    </div>
+  </div>
+</section>
+
+</main>
+</div>
+</div>
+
+<div id="toasts" aria-live="polite"></div>
+
+<dialog id="d-gate" aria-labelledby="g-h">
+  <h3 id="g-h" data-i18n="msg_unauthorized">Unauthorized: missing or wrong admin token</h3>
+  <form id="f-gate">
+    <label class="fld"><span>X-Studio-Token</span><input id="g-token" type="password" class="mono" autocomplete="off" spellcheck="false" data-i18n-attr="placeholder:field_token"></label>
+    <label class="fld sect"><span data-i18n="api_endpoint">Open API base</span><input id="g-base" class="mono" data-i18n-attr="placeholder:api_endpoint"></label>
+    <p class="meta sect">studio/.env · STUDIO_ADMIN_TOKEN</p>
+    <div class="foot">
+      <button type="button" class="btn" id="g-cancel"><span data-i18n="action_cancel">Cancel</span></button>
+      <button type="submit" class="btn pri"><span data-i18n="action_save">Save</span></button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="d-qr" aria-labelledby="q-h">
+  <h3 id="q-h" data-i18n="bots_qr">QR code</h3>
+  <form>
+    <dl class="kv"><dt data-i18n="bots_permanent_link">Permanent address</dt><dd id="q-link">—</dd><dt>sha256</dt><dd id="q-hash">—</dd></dl>
+    <img id="q-img" width="230" height="230" data-i18n-attr="alt:bots_qr">
+    <div class="row sect" style="justify-content:center"><a class="btn" id="q-png" href="#" target="_blank" rel="noopener">qr.png</a></div>
+    <div class="foot">
+      <button type="button" class="btn" id="q-copy"><span data-i18n="action_copy">Copy</span></button>
+      <button type="button" class="btn" id="q-cancel"><span data-i18n="action_cancel">Cancel</span></button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="d-del" aria-labelledby="x-h">
+  <h3 id="x-h" data-i18n="action_delete">Delete</h3>
+  <form>
+    <p style="margin:0" data-i18n="msg_confirm_delete">Delete this bot and its data?</p>
+    <p class="meta sect" id="x-target"></p>
+    <div class="foot">
+      <button type="button" class="btn" id="x-cancel"><span data-i18n="action_cancel">Cancel</span></button>
+      <button type="button" class="btn pri" id="x-confirm"><span data-i18n="action_delete">Delete</span></button>
+    </div>
+  </form>
+</dialog>
+
+<template id="t-toast">
+  <div class="toast" role="status">
+    <span class="tag" data-i18n="msg_saved">Saved</span>
+    <span class="tag" data-i18n="msg_error">Error</span>
+    <span class="msg"></span>
+  </div>
+</template>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ========================================================== i18n engine */
+  var LS_LOC = "popopx.locale", LS_TOK = "popopx.adminToken", LS_BASE = "popopx.apiBase", NAME = "admin";
+  /* The 18 codes are the detection floor: the switcher and normalize() must work
+     before the catalog is spliced or fetched. Translations still come from CAT only. */
+  var CAT = { fallback: "en", locales: ["en", "zh-Hans", "zh-Hant", "ja", "bg", "cs", "de", "es", "fi", "fr", "hu", "it", "nl", "pl", "ru", "th", "tr", "uk"],
+            labels: { en: "English" }, admin: {}, site: {}, welcome: {} };
+  var cur = "en", reRender = null;
+  /* zh variants are the only tags that need mapping; anything else unknown stays
+     unsupported so detect() can keep walking the candidate list. */
+  var ALIAS = {
+    zh: "zh-Hans", "zh-cn": "zh-Hans", "zh-sg": "zh-Hans", "zh-hans": "zh-Hans", "zh-hans-cn": "zh-Hans",
+    "zh-tw": "zh-Hant", "zh-hk": "zh-Hant", "zh-mo": "zh-Hant", "zh-hant": "zh-Hant",
+    "zh-hant-tw": "zh-Hant", "zh-hant-hk": "zh-Hant"
+  };
+
+  function table() {
+    var out = {}, list = CAT.locales || [];
+    for (var i = 0; i < list.length; i++) out[String(list[i]).toLowerCase()] = list[i];
+    return out;
+  }
+
+  function normalize(tag) {
+    if (!tag) return "";
+    var t = String(tag).trim().replace(/_/g, "-").toLowerCase(), map = table();
+    if (!t) return "";
+    if (map[t]) return map[t];
+    if (ALIAS[t]) return ALIAS[t];
+    var base = t.split("-")[0];
+    return ALIAS[base] || map[base] || "";
+  }
+
+  function fromList(list) {
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i];
+      if (c === null || c === undefined) continue;
+      var arr = Object.prototype.toString.call(c) === "[object Array]" ? c : [c];
+      for (var j = 0; j < arr.length; j++) {
+        var hit = normalize(String(arr[j]).split(";")[0]);
+        if (hit) return hit;
+      }
+    }
+    return CAT.fallback || "en";
+  }
+
+  function detect(candidates) {
+    if (candidates !== undefined) return fromList([candidates]);
+    var q = "";
+    try { q = new URLSearchParams(location.search).get("locale") || ""; } catch (e) { q = ""; }
+    var stored = "";
+    try { stored = localStorage.getItem(LS_LOC) || ""; } catch (e) { stored = ""; }
+    var sel = document.getElementById("lang");
+    return fromList([q, stored, sel && sel.value, navigator.languages || [], navigator.language || ""]);
+  }
+
+  function dict(catalogName, key) {
+    var tbl = CAT[catalogName] || {}, row = tbl[cur], v = row && row[key];
+    if (typeof v === "string" && v) return v;
+    var fb = tbl[CAT.fallback || "en"];
+    if (fb && typeof fb[key] === "string" && fb[key]) return fb[key];
+    var en = tbl.en;
+    if (en && typeof en[key] === "string" && en[key]) return en[key];
+    return key;
+  }
+  function t(key) { return dict(NAME, key); }
+  function loaded() { var tbl = CAT[NAME]; return !!(tbl && tbl[CAT.fallback || "en"]); }
+
+  function roots() {
+    var out = [document], tp = document.querySelectorAll("template");
+    for (var i = 0; i < tp.length; i++) if (tp[i].content) out.push(tp[i].content);
+    return out;
+  }
+
+  function apply() {
+    var live = loaded(), all = roots();
+    for (var r = 0; r < all.length; r++) {
+      var nodes = all[r].querySelectorAll("[data-i18n]");
+      for (var i = 0; i < nodes.length; i++) {
+        if (!live) continue;                       /* raw file on disk: keep source text */
+        nodes[i].textContent = dict(NAME, nodes[i].getAttribute("data-i18n"));
+      }
+      var attrs = all[r].querySelectorAll("[data-i18n-attr]");
+      for (var a = 0; a < attrs.length; a++) {
+        if (!live) continue;
+        var pairs = attrs[a].getAttribute("data-i18n-attr").split(";");
+        for (var p = 0; p < pairs.length; p++) {
+          var ix = pairs[p].indexOf(":");
+          if (ix < 1) continue;
+          attrs[a].setAttribute(pairs[p].slice(0, ix).trim(), dict(NAME, pairs[p].slice(ix + 1).trim()));
+        }
+      }
+    }
+    var brand = document.getElementById("brand-title");
+    document.title = brand ? brand.textContent : "POPOPX Bot Studio";
+    var sel = document.getElementById("lang");
+    if (sel && live) sel.setAttribute("aria-label", t("language"));
+  }
+
+  function fillSelect(sel, value) {
+    if (!sel) return sel;
+    sel.textContent = "";
+    var list = CAT.locales || [];
+    for (var i = 0; i < list.length; i++) {
+      var o = document.createElement("option");
+      o.value = list[i];
+      o.textContent = (CAT.labels && CAT.labels[list[i]]) || list[i];
+      if (list[i] === value) o.selected = true;
+      sel.appendChild(o);
+    }
+    return sel;
+  }
+
+  function set(locale) {
+    cur = normalize(locale) || CAT.fallback || "en";
+    try { localStorage.setItem(LS_LOC, cur); } catch (e) { /* private mode */ }
+    document.documentElement.lang = cur;
+    var sel = document.getElementById("lang");
+    if (sel && sel.value !== cur) sel.value = cur;
+    apply();
+    if (reRender) reRender();
+  }
+
+  function adopt(data) {
+    if (!data || !data.locales || !data.locales.length) return;
+    CAT = { fallback: data.fallback || "en", locales: data.locales, labels: data.labels || {},
+            admin: data.admin || {}, site: data.site || {}, welcome: data.welcome || {} };
+  }
+
+  function loadEmbedded() {
+    var node = document.getElementById("i18n-catalog");
+    if (!node) return;
+    try { adopt(JSON.parse(node.textContent)); } catch (e) { /* marker not spliced yet */ }
+  }
+
+  /* Live dictionary is preferred; offline, file:// or a 401 silently keeps the embedded copy. */
+  function loadLive() {
+    return fetch(apiBase() + "/api/i18n/payload", { headers: { Accept: "application/json" } })
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(adopt)
+      .catch(function () { });
+  }
+
+  window.I18N = {
+    t: t, dict: dict, normalize: normalize, detect: detect,
+    catalog: function () { return CAT; },
+    set: set,
+    /* getter, so a test can read the active locale after set() */
+    get locale() { return cur; }
+  };
+
+  /* ========================================================= dom helpers */
+  var API = "/api/admin";
+  function apiBase() {
+    var s = "";
+    try { s = localStorage.getItem(LS_BASE) || ""; } catch (e) { /* ignore */ }
+    if (s) return s.replace(/\/+$/, "");
+    if (location.protocol === "http:" || location.protocol === "https:") return location.origin;
+    return "http://127.0.0.1:8090";
+  }
+  function url(p) { return apiBase() + p; }
+  function get(id) { return document.getElementById(id); }
+
+  function esc(v) {
+    if (v === null || v === undefined) return "";
+    return String(v).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  /* Tagged template: every interpolation is escaped, so no server string (bot
+     name, rule pattern, plugin description) can ever become markup. */
+  function m(strings) {
+    var out = strings[0];
+    for (var i = 1; i < arguments.length; i++) out += esc(arguments[i]) + strings[i];
+    return out;
+  }
+  function paint(node, markup) { node.innerHTML = markup; return node; }
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined && text !== null) n.textContent = String(text);
+    return n;
+  }
+  function on(node, ev, fn) { node.addEventListener(ev, fn); return node; }
+  function btn(label, cls, fn) {
+    var b = el("button", "btn" + (cls ? " " + cls : ""));
+    b.type = "button";
+    b.appendChild(el("span", null, label));
+    return on(b, "click", fn);
+  }
+  function st(state, text) {
+    var s = el("span", "st");
+    s.setAttribute("data-s", state);
+    s.appendChild(el("b"));
+    s.appendChild(el("span", null, text));
+    return s;
+  }
+  function json(v) { try { return JSON.stringify(v, null, 2); } catch (e) { return String(v); } }
+  function num(v) {
+    var n = Number(v);
+    return isFinite(n) ? String(n) : String(v == null ? 0 : v);
+  }
+  function mask(s) {
+    s = String(s || "");
+    return !s ? "—" : s.length <= 10 ? "••••" : s.slice(0, 4) + "••••••" + s.slice(-4);
+  }
+  function p2(n) { return (n < 10 ? "0" : "") + n; }
+  function hhmmss(ts) {
+    var d = new Date((ts || 0) * 1000);
+    return d.getFullYear() + "-" + p2(d.getMonth() + 1) + "-" + p2(d.getDate()) + " " +
+      p2(d.getHours()) + ":" + p2(d.getMinutes()) + ":" + p2(d.getSeconds());
+  }
+
+  function copy(text) {
+    text = String(text == null ? "" : text);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { toast(t("msg_saved"), text.slice(0, 60)); },
+        function () { legacyCopy(text); });
+      return;
+    }
+    legacyCopy(text);
+  }
+  function legacyCopy(text) {
+    var ta = el("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.left = "-2000px";
+    document.body.appendChild(ta);
+    ta.select();
+    var done = false;
+    try { done = document.execCommand("copy"); } catch (e) { done = false; }
+    document.body.removeChild(ta);
+    if (done) toast(t("msg_saved"), text.slice(0, 60)); else toast(t("msg_error"), "clipboard", true);
+  }
+
+  function toast(label, detail, isErr) {
+    var node = get("t-toast").content.firstElementChild.cloneNode(true);
+    node.className = "toast " + (isErr ? "err" : "ok");
+    node.querySelector(".msg").textContent = detail == null ? "" : String(detail);
+    get("toasts").appendChild(node);
+    window.setTimeout(function () { node.style.opacity = "0"; }, 3200);
+    window.setTimeout(function () { node.remove(); }, 3900);
+  }
+  function openDlg(d) {
+    if (typeof d.showModal === "function") { if (!d.open) d.showModal(); } else d.setAttribute("open", "");
+  }
+  function closeDlg(d) { if (typeof d.close === "function" && d.open) d.close(); else d.removeAttribute("open"); }
+
+  /* ================================================================ state */
+  var S = { token: "", view: "dashboard", bots: [], runtime: [], overview: null, config: null,
+            rules: [], commands: [], routing: [], groups: [], plugins: null, backups: [],
+            pendingDelete: null, qrLink: "" };
+
+  function readToken() { try { return localStorage.getItem(LS_TOK) || ""; } catch (e) { return ""; } }
+  function saveToken(v) {
+    S.token = v || "";
+    try { if (v) localStorage.setItem(LS_TOK, v); else localStorage.removeItem(LS_TOK); } catch (e) { }
+  }
+
+  /* FastAPI wraps HTTPException bodies under "detail"; JSONResponse.fail() is flat. */
+  function describe(data, status) {
+    if (typeof data === "string" && data) return data;
+    var d = (data && data.detail) || data || {};
+    if (d && typeof d === "object") {
+      var x = d.description || d.message || d.error_code;
+      if (x) return String(x);
+    }
+    return (data && (data.description || data.message)) ? String(data.description || data.message) : "HTTP " + status;
+  }
+
+  function api(path, opts) {
+    var o = opts || {}, headers = { Accept: "application/json", "X-Studio-Token": S.token || readToken() };
+    if (o.body !== undefined) headers["Content-Type"] = "application/json";
+    return fetch(url(path), {
+      method: o.method || "GET", headers: headers,
+      body: o.body === undefined ? undefined : JSON.stringify(o.body)
+    }).then(function (res) {
+      if (res.status === 401) { showGate(); throw new Error(t("msg_unauthorized")); }
+      return res.text().then(function (raw) {
+        var data;
+        try { data = raw ? JSON.parse(raw) : {}; }
+        catch (e) { throw new Error("HTTP " + res.status + " · " + raw.slice(0, 140)); }
+        if (!res.ok || data.ok === false) throw new Error(describe(data, res.status));
+        return data;
+      });
+    });
+  }
+  function guard() {
+    return function (e) { toast(t("msg_error"), e && e.message ? e.message : String(e), true); };
+  }
+  function post(path, body, done) {
+    api(path, { method: "POST", body: body || {} }).then(done || function () { })
+      .catch(guard());
+  }
+  function botOptions(sel, global) {
+    if (!sel) return;
+    var keep = sel.value;
+    sel.textContent = "";
+    if (global) sel.appendChild(new Option("global", ""));
+    S.bots.forEach(function (b) { sel.appendChild(new Option(b.name + " · " + b.id, String(b.id))); });
+    if (keep) sel.value = keep;
+  }
+  function botNames() {
+    var out = {};
+    S.bots.forEach(function (b) { out[String(b.id)] = b.name; });
+    return out;
+  }
+
+  /* ============================================================== status */
+  function renderStrip() {
+    var ov = S.overview || {}, cfg = S.config || {};
+    var loop = ov.loopback_only === undefined ? cfg.loopback_only : ov.loopback_only;
+    var cli = cfg.cli_present === true ? "present" : cfg.cli_present === false ? "missing" : "—";
+    var cells = [
+      ["host", (ov.host || cfg.host || "127.0.0.1") + ":" + (ov.port || cfg.port || ""), ""],
+      ["loopback_only", loop === false ? "off" : "only", loop === false ? "off" : "on"],
+      ["popopx-cli", cli, cli === "missing" ? "off" : ""],
+      [t("dash_bots"), num((ov.bots && ov.bots.total) || 0), ""],
+      [t("dash_running"), num(ov.running || 0), ""]
+    ];
+    paint(get("strip"), cells.map(function (c) {
+      return m`<div class="cell"><span class="k">${c[0]}</span><span class="v mono ${c[2]}">${c[1]}</span></div>`;
+    }).join(""));
+  }
+
+  /* =========================================================== 1 dashboard */
+  function loadDashboard() {
+    return api(API + "/overview").then(function (d) {
+      S.overview = d;
+      renderStrip();
+      renderMetrics(d);
+      renderTrend(d.trend || []);
+      renderPluginHealth(d.plugins || {});
+      renderWarnings(d.warnings || [], d.gateway_errors || []);
+      get("dash-stamp").textContent = hhmmss(Date.now() / 1000);
+      loadLogs();
+    }).catch(guard());
+  }
+  function renderMetrics(d) {
+    var sum = d.bots || {}, msgs = d.messages || {}, gw = d.gateway || {};
+    fill("m-bots", num(sum.total || 0), "stopped:" + num(sum.stopped || 0) + " · deleted:" + num(sum.deleted || 0));
+    fill("m-run", num(sum.running || 0), "starting:" + num(sum.starting || 0) + " · error:" + num(sum.error || 0));
+    fill("m-msg", num((msgs.incoming || 0) + (msgs.outgoing || 0)), "in:" + num(msgs.incoming || 0) + " · out:" + num(msgs.outgoing || 0));
+    fill("m-ev", num(gw.delivered || 0), "queued_updates:" + num(gw.queued_updates || 0));
+  }
+  function fill(id, value, sub) { get(id).textContent = value; get(id + "-s").textContent = sub; }
+
+  function renderTrend(rows) {
+    var max = 1, total = 0;
+    rows.forEach(function (r) { max = Math.max(max, Number(r.total) || 0); total += Number(r.total) || 0; });
+    var bars = rows.map(function (r) {
+      var pct = Math.max(2, Math.round((100 * (Number(r.total) || 0)) / max));
+      return m`<i style="height:${pct}%" title="${r.day} ${r.total}"></i>`;
+    });
+    if (!bars.length) bars = [m`<i style="height:2%"></i>`];
+    paint(get("trend"), bars.join(""));
+    paint(get("trend-x"), rows.map(function (r) { return m`<span>${String(r.day).slice(5)}</span>`; }).join(""));
+    get("trend-total").textContent = num(total);
+  }
+
+  function renderPluginHealth(h) {
+    var rows = h.plugins || [], list = get("ph-list");
+    get("ph-count").textContent = num(rows.length);
+    list.textContent = "";
+    if (!rows.length) { list.appendChild(el("li", "meta", "plugins: 0")); return; }
+    rows.forEach(function (p) {
+      var state = p.enabled ? (p.loaded ? "loaded" : "partial") : "disabled";
+      var label = p.enabled ? (p.loaded ? "enabled" : "unloaded") : "disabled";
+      var li = el("li");
+      li.append(st(state, label), el("span", "mono", p.plugin_id), el("span", "meta", p.name || ""),
+        el("span", "meta", "processed:" + num(p.processed) + " · replied:" + num(p.replied) + " · errors:" + num(p.errors)));
+      list.appendChild(li);
+    });
+  }
+
+  function renderWarnings(warnings, errors) {
+    var box = get("warn-box");
+    box.textContent = "";
+    warnings.forEach(function (w) { box.appendChild(el("p", "note", w)); });
+    errors.forEach(function (e) { box.appendChild(el("p", "note bad", typeof e === "string" ? e : json(e))); });
+  }
+
+  function loadLogs() {
+    api(API + "/logs?limit=50").then(function (d) {
+      var rows = (d.logs || []).map(function (l) {
+        return [hhmmss(l.ts), l.direction, l.bot_id, l.chat_ref, l.status,
+          l.plugin_id || (l.rule_id ? "rule#" + l.rule_id : "-"), l.text].join("  ");
+      });
+      get("logs").textContent = rows.length ? rows.join("\n") : "message_logs: 0";
+      var st = d.stats || {};
+      get("logs").textContent += "\n\nincoming:" + num(st.incoming) + " · outgoing:" + num(st.outgoing);
+    }).catch(guard());
+    api(API + "/updates?limit=25").then(function (u) {
+      get("updates").textContent = (u.updates || []).length
+        ? json(u.updates) : "updates: 0 · buffered:" + num(u.buffered);
+    }).catch(guard());
+  }
+
+  /* ================================================================ 2 bots */
+  function loadBots() {
+    return api(API + "/bots").then(function (d) {
+      S.bots = d.bots || [];
+      S.runtime = (d.runtime && d.runtime.bots) || [];
+      get("bots-stamp").textContent = num(S.bots.length) + " × bots";
+      renderBots();
+      botOptions(get("e-bot"), false);
+      botOptions(get("r-bot"), false);
+      botOptions(get("rt-bot"), false);
+      botOptions(get("pl-bot"), true);
+      botOptions(get("x-bot"), false);
+      if (S.bots.length) pickBot(S.bots[0].id);
+      return d;
+    }).catch(guard());
+  }
+  function runtimeOf(id) {
+    for (var i = 0; i < S.runtime.length; i++) if (String(S.runtime[i].bot_id) === String(id)) return S.runtime[i];
+    return null;
+  }
+  function renderBots() {
+    var body = get("bots-rows");
+    body.textContent = "";
+    get("bots-empty").hidden = S.bots.length > 0;
+    S.bots.forEach(function (b) {
+      var rt = runtimeOf(b.id), status = String(b.status || (rt && rt.state) || "stopped");
+      var tr = el("tr");
+      tr.appendChild(el("td", "mono", b.id));
+      tr.appendChild(el("td", null, b.name));
+      tr.appendChild(el("td", "mono", num(b.port)));
+      tr.appendChild(el("td")).appendChild(st(status, status));
+      tr.appendChild(el("td", "row")).append(
+        el("span", "mono meta", mask(b.bot_token)),
+        btn(t("action_copy"), "sm", function () { copy(b.bot_token); }));
+      var acts = el("td", "row");
+      ["start", "stop", "restart"].forEach(function (verb) {
+        acts.appendChild(btn(t("action_" + verb), "sm", function () {
+          post(API + "/bots/" + encodeURIComponent(b.id) + "/" + verb, {}, function () {
+            toast(t("msg_saved"), b.name + " · " + verb);
+            loadBots();
+          });
+        }));
+      });
+      tr.appendChild(acts);
+      tr.appendChild(el("td")).appendChild(btn(t("bots_qr"), "sm", function () { showQr(b.id); }));
+      on(tr, "click", function (ev) {
+        if (ev.target.closest("button")) return;
+        pickBot(b.id);
+      });
+      body.appendChild(tr);
+    });
+  }
+  function pickBot(id) {
+    var b = null;
+    S.bots.forEach(function (x) { if (String(x.id) === String(id)) b = x; });
+    if (!b) return;
+    get("e-bot").value = String(b.id);
+    get("e-display").value = b.display_name || "";
+    get("e-welcome").value = b.welcome_text || "";
+    get("e-smp").value = b.smp_servers || "";
+    get("e-auto").checked = !!Number(b.auto_accept || 0);
+    get("e-inc").checked = !!Number(b.accept_incognito || 0);
+    if (b.default_locale) get("e-locale").value = b.default_locale;
+    get("card-new").classList.add("live");
+  }
+  function showQr(id) {
+    api(API + "/bots/" + encodeURIComponent(id) + "/qrcode").then(function (d) {
+      S.qrLink = String(d.link || "");
+      get("q-link").textContent = S.qrLink || "—";
+      get("q-hash").textContent = String(d.sha256 || "—");
+      var img = get("q-img");
+      img.src = String(d.data_url || "");
+      img.hidden = !d.data_url;
+      get("q-png").href = url(API + "/bots/" + encodeURIComponent(id) + "/qr.png");
+      openDlg(get("d-qr"));
+      get("q-cancel").focus();
+    }).catch(guard());
+  }
+
+  /* =============================================================== 3 rules */
+  function ruleBot() { return get("r-bot").value; }
+  function loadRules() {
+    var id = ruleBot();
+    if (!id) { get("rules-rows").textContent = ""; get("rules-empty").hidden = false; return Promise.resolve(); }
+    return api(API + "/bots/" + encodeURIComponent(id) + "/rules").then(function (d) {
+      S.rules = d.rules || [];
+      S.commands = d.commands || [];
+      get("rules-stamp").textContent = num(S.rules.length) + " × reply_rules";
+      get("r-cmds").textContent = "commands: " + (S.commands.join(" ") || "—");
+      var body = get("rules-rows");
+      body.textContent = "";
+      get("rules-empty").hidden = S.rules.length > 0;
+      S.rules.forEach(function (r) {
+        var tr = el("tr");
+        tr.appendChild(el("td", "mono", num(r.id)));
+        tr.appendChild(el("td")).appendChild(st(r.trigger_type === "default" ? "enabled" : "ok", r.trigger_type));
+        tr.appendChild(el("td", "mono", r.pattern || "—"));
+        tr.appendChild(el("td", null, r.reply_text || ""));
+        tr.appendChild(el("td", "mono", num(r.cooldown_seconds)));
+        tr.appendChild(el("td", "mono", num(r.priority)));
+        tr.appendChild(el("td")).appendChild(st(r.enabled ? "ok" : "disabled", r.enabled ? "enabled" : "disabled"));
+        tr.appendChild(el("td", "meta", num(r.hits || 0)));
+        tr.appendChild(el("td")).appendChild(btn(t("action_delete"), "sm dgr", function () {
+          askDelete("rule_id " + r.id, function () {
+            api(API + "/rules/" + encodeURIComponent(r.id), { method: "DELETE", body: {} })
+              .then(function () { toast(t("msg_saved"), "rule " + r.id); loadRules(); }).catch(guard());
+          });
+        }));
+        body.appendChild(tr);
+      });
+    }).catch(guard());
+  }
+
+  /* ============================================================= 4 routing */
+  function routeBot() { return get("rt-bot").value; }
+  function loadRouting() {
+    var id = routeBot();
+    if (!id) { get("rt-list").textContent = ""; get("rt-empty").hidden = false; return Promise.resolve(); }
+    return api(API + "/bots/" + encodeURIComponent(id) + "/routing").then(function (d) {
+      S.routing = d.rules || [];
+      S.groups = d.known_groups || [];
+      get("rt-stamp").textContent = num(S.routing.length) + " × routing_rules";
+      get("rt-groups").textContent = "known_groups: " + num(S.groups.length);
+      var dl = get("d-groups");
+      dl.textContent = "";
+      S.groups.forEach(function (g) { dl.appendChild(new Option(g, g)); });
+      var list = get("rt-list");
+      list.textContent = "";
+      get("rt-empty").hidden = S.routing.length > 0;
+      S.routing.forEach(function (r) {
+        var row = el("div", "flow");
+        row.append(
+          el("span", "node", (r.source_type || "any") + (r.source_ref ? " " + r.source_ref : "")),
+          el("span", "link"),
+          el("span", "node tgt", (r.target_type || "group") + " " + (r.target_ref || "—")));
+        row.appendChild(el("span", "meta", [
+          r.keyword_mode !== "any" ? r.keyword_mode + ":" + (r.keywords || []).join("|") : "",
+          r.cooldown_seconds ? "cooldown:" + r.cooldown_seconds : "",
+          r.quote_reply ? "quote_reply" : "", r.enabled ? "enabled" : "disabled"
+        ].filter(Boolean).join(" · ")));
+        if (r.template) row.appendChild(el("span", "node", r.template));
+        row.appendChild(btn(t("action_delete"), "sm dgr", function () {
+          askDelete("rule_id " + r.id, function () {
+            api(API + "/routing/" + encodeURIComponent(r.id), { method: "DELETE", body: {} })
+              .then(function () { toast(t("msg_saved"), "route " + r.id); loadRouting(); }).catch(guard());
+          });
+        }));
+        list.appendChild(row);
+      });
+    }).catch(guard());
+  }
+
+  /* ============================================================= 5 plugins */
+  function loadPlugins() {
+    return api(API + "/plugins").then(function (d) {
+      S.plugins = d;
+      var rows = d.plugins || [], fails = d.failures || {}, keys = Object.keys(fails);
+      get("pl-stamp").textContent = num(rows.length) + " × plugins";
+      get("pl-dispatch").textContent = "dispatches: " + num(d.dispatches);
+      get("pl-fail").textContent = "failures: " + num(keys.length);
+      get("pl-fail").className = "pill" + (keys.length ? " warn" : "");
+      var list = get("pl-list");
+      list.textContent = "";
+      rows.forEach(function (p) { list.appendChild(pluginCard(p, fails[p.plugin_id])); });
+    }).catch(guard());
+  }
+
+  function pluginCard(p, failure) {
+    var card = el("div", "card sect"), head = el("header"), sp = el("div", "row");
+    head.appendChild(el("h2", null, p.name || p.plugin_id));
+    sp.appendChild(st(p.enabled ? (p.loaded ? "loaded" : "partial") : "disabled",
+      p.enabled ? (p.loaded ? "enabled" : "unloaded") : "disabled"));
+    sp.appendChild(btn(p.enabled ? t("action_disable") : t("action_enable"), "sm", function () {
+      patchPlugin(p.plugin_id, { plugin_id: p.plugin_id, enabled: !p.enabled });
+    }));
+    head.appendChild(sp);
+    card.appendChild(head);
+
+    var bd = el("div", "bd"), kv = el("dl", "kv");
+    bd.appendChild(el("p", "meta", p.description || ""));
+    [["plugin_id", p.plugin_id], ["version", p.version], ["priority", num(p.priority)], ["scope", p.scope],
+      ["processed", num(p.processed)], ["replied", num(p.replied)], ["errors", num(p.errors)]]
+      .forEach(function (pair) {
+        kv.appendChild(el("dt", null, pair[0]));
+        kv.appendChild(el("dd", null, pair[1] == null ? "—" : String(pair[1])));
+      });
+    bd.appendChild(kv);
+    if (p.last_error) bd.appendChild(el("p", "note bad sect", String(p.last_error)));
+    if (failure) bd.appendChild(el("p", "note bad sect", "load failure: " + String(failure)));
+
+    /* config_fields arrive from the plugin itself: a third-party plugin renders
+       a real form here without any change to this page. */
+    var fields = el("div", "grid sect"), cfg = p.config || {}, originals = {};
+    (p.config_fields || []).forEach(function (f) {
+      if (!f || !f.key) return;
+      originals[f.key] = cfg[f.key];
+      var wrap = el("label", "fld"), val = cfg[f.key], ctl;
+      wrap.appendChild(el("span", null, f.label || f.key));
+      if (f.type === "bool") {
+        ctl = el("input");
+        ctl.type = "checkbox";
+        ctl.checked = val === true || Number(val) === 1;
+      } else if (f.type === "textarea" || f.type === "json") {
+        ctl = el("textarea");
+        ctl.rows = f.type === "json" ? 5 : 3;
+        if (f.type === "json") ctl.className = "mono";
+        ctl.value = val && typeof val === "object" ? JSON.stringify(val, null, 2) : (val == null ? "" : String(val));
+      } else if (f.type === "number") {
+        ctl = el("input");
+        ctl.type = "number";
+        ctl.className = "mono";
+        ctl.step = "any";
+        ctl.value = val == null ? "" : String(val);
+      } else if (f.type === "select") {
+        ctl = el("select");
+        (f.options || []).forEach(function (o) {
+          ctl.appendChild(new Option(o && typeof o === "object" ? (o.label || o.value) : String(o),
+            o && typeof o === "object" ? o.value : o));
+        });
+        if (val != null) ctl.value = String(val);
+      } else {
+        ctl = el("input");
+        ctl.type = f.type === "password" ? "password" : "text";
+        if (f.type === "password") { ctl.className = "mono"; ctl.setAttribute("autocomplete", "new-password"); }
+        if (val != null) ctl.value = String(val);
+      }
+      ctl.id = "pf-" + p.plugin_id + "-" + f.key;
+      ctl.setAttribute("data-key", f.key);
+      ctl.setAttribute("data-type", f.type || "text");
+      wrap.appendChild(ctl);
+      if (f.hint) wrap.appendChild(el("span", "meta", String(f.hint)));
+      fields.appendChild(wrap);
+    });
+    bd.appendChild(fields);
+    card.appendChild(bd);
+
+    var foot = el("div", "row");
+    foot.style.padding = "11px 14px";
+    foot.style.borderTop = "1px solid var(--line)";
+    foot.appendChild(btn(t("action_save"), "pri sm", function () {
+      var out = {}, inputs = fields.querySelectorAll("[data-key]");
+      for (var i = 0; i < inputs.length; i++) {
+        var node = inputs[i], key = node.getAttribute("data-key"), type = node.getAttribute("data-type"), v;
+        if (type === "bool") v = node.checked;
+        else if (type === "number") v = node.value === "" ? 0 : Number(node.value);
+        else if (type === "json") {
+          if (!node.value.trim()) v = {};
+          else { try { v = JSON.parse(node.value); } catch (e) { toast(t("msg_error"), key + " json", true); return; } }
+        } else v = node.value;
+        /* the backend masks every non-empty stored value, not just passwords:
+           anything the operator did not retype is omitted instead of echoed. */
+        if (typeof v === "string" && v === "********" && originals[key] === "********") continue;
+        out[key] = v;
+      }
+      var body = { plugin_id: p.plugin_id, config: out }, scope = get("pl-bot").value;
+      if (scope) body.bot_id = scope;
+      /* config_fields carries its own "enabled" master switch; mirror it onto the
+         top level so the PATCH actually moves the runtime state. */
+      if (Object.prototype.hasOwnProperty.call(out, "enabled")) body.enabled = !!out.enabled;
+      patchPlugin(p.plugin_id, body);
+    }));
+    card.appendChild(foot);
+    return card;
+  }
+
+  function patchPlugin(id, body) {
+    api(API + "/plugins/" + encodeURIComponent(id), { method: "PATCH", body: body })
+      .then(function () { toast(t("msg_saved"), id); loadPlugins(); })
+      .catch(guard());
+  }
+
+  /* ================================================================== 6 api */
+  var ENDPOINTS = [
+    { name: "getMe", method: "GET", path: "/getMe" },
+    { name: "sendMessage", method: "POST", path: "/sendMessage" },
+    { name: "broadcastGroup", method: "POST", path: "/broadcastGroup" },
+    { name: "setWebhook", method: "POST", path: "/setWebhook" },
+    { name: "getUpdates", method: "GET", path: "/getUpdates" }
+  ];
+  function apiTarget(ep) {
+    var base = get("a-base").value.replace(/\/+$/, ""), tok = get("a-token").value.trim();
+    if (get("a-pathform").checked && tok) return base + "/bot" + encodeURIComponent(tok) + ep.path;
+    return base + ep.path;
+  }
+  function apiBody(ep) {
+    var ref = get("a-ref").value.trim(), text = get("a-text").value;
+    if (ep.method === "GET") return null;
+    if (ep.name === "setWebhook") return { url: get("a-hook").value.trim() };
+    return { chat_ref: ref, text: text };
+  }
+  function renderApiButtons() {
+    var box = get("a-verbs");
+    box.textContent = "";
+    ENDPOINTS.forEach(function (ep) { box.appendChild(btn(ep.method + " " + ep.name, "sm", function () { runApi(ep); })); });
+    renderCurl();
+  }
+  function renderCurl() {
+    var target = apiTarget(ENDPOINTS[0]), tok = get("a-token").value.trim() || "BOT_TOKEN";
+    get("a-preview").textContent = (get("a-pathform").checked ? "path token" : "bearer") + " · " + target;
+    get("a-curl").textContent = "curl -sS '" + target + "' \\\n  -H 'Authorization: Bearer " + tok + "'";
+    get("api-stamp").textContent = "/api/v1";
+  }
+  function runApi(ep) {
+    var target = apiTarget(ep), tok = get("a-token").value.trim(), body = apiBody(ep), t0 = Date.now();
+    if (ep.method === "GET" && get("a-limit").value) {
+      target += (target.indexOf("?") < 0 ? "?" : "&") + "limit=" + encodeURIComponent(get("a-limit").value);
+    }
+    renderCurlFull(ep, target, body, tok);
+    var headers = { Accept: "application/json", Authorization: "Bearer " + tok };
+    var init = { method: ep.method, headers: headers };
+    if (body) { headers["Content-Type"] = "application/json"; init.body = JSON.stringify(body); }
+    get("a-status").textContent = "… " + ep.method + " " + ep.name;
+    get("a-status").className = "pill";
+    fetch(target, init).then(function (res) {
+      return res.text().then(function (raw) {
+        var pretty = raw;
+        try { pretty = JSON.stringify(JSON.parse(raw), null, 2); } catch (e) { /* non-JSON body */ }
+        get("a-status").textContent = "HTTP " + res.status + " · " + (Date.now() - t0) + " ms";
+        get("a-status").className = "pill" + (res.ok ? " acc" : " warn");
+        get("a-out").textContent = pretty || "(empty body)";
+      });
+    }).catch(function (e) {
+      get("a-status").textContent = "failed";
+      get("a-status").className = "pill warn";
+      get("a-out").textContent = e && e.message ? e.message : String(e);
+    });
+  }
+  function renderCurlFull(ep, target, body, tok) {
+    var line = "curl -sS '" + target + "' \\\n  -H 'Authorization: Bearer " + tok + "'";
+    if (body) {
+      line += " \\\n  -H 'Content-Type: application/json' \\\n  -d '" + JSON.stringify(body) + "'";
+    }
+    get("a-curl").textContent = line;
+  }
+
+  /* ============================================================== 7 backup */
+  function loadConfig() {
+    return api(API + "/config").then(function (c) {
+      S.config = c;
+      renderStrip();
+      var kv = get("cfg-kv");
+      kv.textContent = "";
+      [["host", c.host], ["port", num(c.port)], ["loopback_only", String(c.loopback_only)],
+        ["allow_lan", String(c.allow_lan)], ["data_dir", c.data_dir], ["db_file", c.db_file],
+        ["state_file", c.state_file], ["bots_dir", c.bots_dir], ["backups_dir", c.backups_dir],
+        ["cli_bin_path", c.cli_bin_path], ["cli_present", String(c.cli_present)],
+        ["ws_port", num(c.ws_port_base) + "–" + num(c.ws_port_max)], ["default_locale", c.default_locale],
+        ["token_configured", String(c.token_configured)], ["token_masked", c.token_masked]]
+        .forEach(function (pair) {
+          kv.appendChild(el("dt", null, pair[0]));
+          kv.appendChild(el("dd", null, pair[1] == null ? "—" : String(pair[1])));
+        });
+      get("cfg-argv").textContent = (c.example_argv || []).join(" ") + "\n\n" + (c.wrapper_preview || "");
+      get("cfg-loop").textContent = "loopback_only: " + String(c.loopback_only);
+      get("cfg-loop").className = "pill" + (c.loopback_only ? " acc" : " warn");
+      /* permission_warnings is an operator-facing security surface: always shown. */
+      var warn = get("cfg-warn"), pw = c.permission_warnings || [], sw = c.warnings || [];
+      warn.textContent = "";
+      pw.forEach(function (w) { warn.appendChild(el("p", "note bad", "permission_warnings · " + String(w))); });
+      sw.forEach(function (w) { warn.appendChild(el("p", "note", "startup_warnings · " + String(w))); });
+      if (!pw.length && !sw.length) warn.appendChild(el("p", "meta", "permission_warnings: 0 · 0600 ok"));
+      get("bk-stamp").textContent = hhmmss(Date.now() / 1000);
+    }).catch(guard());
+  }
+  function loadBackups() {
+    return api(API + "/backups").then(function (d) {
+      S.backups = d.backups || [];
+      var list = get("bk-list");
+      list.textContent = "";
+      if (!S.backups.length) { list.appendChild(el("p", "meta", "backups: 0")); return; }
+      S.backups.forEach(function (b) {
+        var row = el("div", "flow");
+        row.append(el("span", "node", String(b.file).split("/").pop()),
+          el("span", "meta", num(b.bytes) + " bytes · " + hhmmss(b.mtime)));
+        row.appendChild(btn(t("action_copy"), "sm", function () { copy(b.file); }));
+        list.appendChild(row);
+      });
+    }).catch(guard());
+  }
+
+  /* ======================================================= dialogs, views */
+  function askDelete(target, then) {
+    S.pendingDelete = then;
+    get("x-target").textContent = target;
+    openDlg(get("d-del"));
+    get("x-cancel").focus();
+  }
+  var LOADERS = { dashboard: loadDashboard, bots: loadBots, rules: loadRules, routing: loadRouting, plugins: loadPlugins };
+  function showView(name) {
+    S.view = name;
+    var secs = document.querySelectorAll(".views > section");
+    for (var i = 0; i < secs.length; i++) secs[i].hidden = secs[i].id !== "v-" + name;
+    var btns = document.querySelectorAll("#nav button");
+    for (var j = 0; j < btns.length; j++) {
+      if (btns[j].getAttribute("data-view") === name) btns[j].setAttribute("aria-current", "page");
+      else btns[j].removeAttribute("aria-current");
+    }
+    document.getElementById("card-cfg").classList.toggle("live", name === "backup");
+    if (LOADERS[name]) LOADERS[name]();
+    else if (name === "backup") { loadConfig(); loadBackups(); }
+    else if (name === "api") renderCurl();
+  }
+  function refreshActive() {
+    if (S.view === "api") renderCurl();
+    else if (S.view === "backup") { loadConfig(); loadBackups(); }
+    else (LOADERS[S.view] || loadDashboard)();
+  }
+  function showGate() {
+    get("g-token").value = S.token || readToken();
+    get("g-base").value = apiBase();
+    openDlg(get("d-gate"));
+    get("g-token").focus();
+  }
+
+  /* ================================================================== wire */
+  function wire() {
+    on(get("nav"), "click", function (ev) {
+      var b = ev.target.closest("button[data-view]");
+      if (b) showView(b.getAttribute("data-view"));
+    });
+    on(get("lang"), "change", function () { set(this.value); });
+    on(get("btn-refresh"), "click", refreshActive);
+    [["btn-logs", loadLogs], ["btn-updates", loadLogs], ["btn-bots", loadBots], ["btn-rules", loadRules],
+      ["btn-rt", loadRouting], ["btn-pl", loadPlugins], ["btn-bk", loadBackups], ["btn-cfg", loadConfig]]
+      .forEach(function (pair) { on(get(pair[0]), "click", pair[1]); });
+    [["r-bot", loadRules], ["rt-bot", loadRouting], ["pl-bot", loadPlugins]].forEach(function (pair) {
+      on(get(pair[0]), "change", pair[1]);
+    });
+    on(get("e-bot"), "change", function () { pickBot(this.value); });
+    on(get("btn-curl"), "click", function () { copy(get("a-curl").textContent); });
+    ["a-base", "a-token"].forEach(function (id) { on(get(id), "input", renderCurl); });
+    on(get("a-pathform"), "change", renderCurl);
+
+    on(get("f-gate"), "submit", function (ev) {
+      ev.preventDefault();
+      saveToken(get("g-token").value.trim());
+      try { localStorage.setItem(LS_BASE, get("g-base").value.trim()); } catch (e) { /* ignore */ }
+      closeDlg(get("d-gate"));
+      get("a-base").value = apiBase() + "/api/v1";
+      renderCurl();
+      refreshActive();
+    });
+    on(get("g-cancel"), "click", function () { closeDlg(get("d-gate")); });
+    on(get("x-cancel"), "click", function () { S.pendingDelete = null; closeDlg(get("d-del")); });
+    on(get("x-confirm"), "click", function () {
+      var fn = S.pendingDelete;
+      S.pendingDelete = null;
+      closeDlg(get("d-del"));
+      if (fn) fn();
+    });
+    on(get("q-cancel"), "click", function () { closeDlg(get("d-qr")); });
+    on(get("q-copy"), "click", function () { copy(S.qrLink); });
+
+    on(get("f-new"), "submit", function (ev) {
+      ev.preventDefault();
+      var body = {
+        name: get("n-name").value.trim(), display_name: get("n-display").value.trim(),
+        default_locale: get("n-locale").value, welcome_text: get("n-welcome").value,
+        smp_servers: get("n-smp").value.trim(), auto_accept: get("n-auto").checked,
+        accept_incognito: get("n-inc").checked, start: true
+      };
+      if (!body.name) { toast(t("msg_error"), "name", true); return; }
+      post(API + "/bots", body, function (d) {
+        toast(t("msg_saved"), (d.bot && d.bot.name) || body.name);
+        get("f-new").reset();
+        get("n-auto").checked = true;
+        get("n-inc").checked = false;          /* hard product requirement: off */
+        loadBots();
+      });
+    });
+
+    on(get("f-edit"), "submit", function (ev) {
+      ev.preventDefault();
+      var id = get("e-bot").value;
+      if (!id) { toast(t("msg_error"), "bot_id", true); return; }
+      api(API + "/bots/" + encodeURIComponent(id), {
+        method: "PATCH",
+        body: {
+          display_name: get("e-display").value.trim(), welcome_text: get("e-welcome").value,
+          default_locale: get("e-locale").value, smp_servers: get("e-smp").value.trim(),
+          auto_accept: get("e-auto").checked, accept_incognito: get("e-inc").checked
+        }
+      }).then(function () { toast(t("msg_saved"), id); loadBots(); }).catch(guard());
+    });
+    on(get("e-del"), "click", function () {
+      var id = get("e-bot").value;
+      if (!id) { toast(t("msg_error"), "bot_id", true); return; }
+      askDelete("bot_id " + id, function () {
+        api(API + "/bots/" + encodeURIComponent(id), { method: "DELETE", body: {} })
+          .then(function () { toast(t("msg_saved"), id); loadBots(); }).catch(guard());
+      });
+    });
+
+    on(get("f-rule"), "submit", function (ev) {
+      ev.preventDefault();
+      var id = ruleBot();
+      if (!id) { toast(t("msg_error"), "bot_id", true); return; }
+      post(API + "/bots/" + encodeURIComponent(id) + "/rules", {
+        trigger_type: get("q-trigger").value, pattern: get("q-pattern").value, reply_text: get("q-reply").value,
+        cooldown_seconds: Number(get("q-cool").value || 0), priority: Number(get("q-prio").value || 100),
+        enabled: get("q-on").checked
+      }, function () { toast(t("msg_saved"), "reply_rule"); loadRules(); });
+    });
+    on(get("f-preview"), "submit", function (ev) {
+      ev.preventDefault();
+      var id = ruleBot();
+      if (!id) { toast(t("msg_error"), "bot_id", true); return; }
+      post(API + "/rules/preview", { bot_id: id, text: get("p-text").value }, function (d) {
+        get("p-out").textContent = json({ matched: d.matched, reply: d.reply, trigger_type: d.trigger_type,
+          status: d.status, rule_id: d.rule_id, suppressed_by: d.suppressed_by });
+        get("card-preview").classList.add("live");
+      });
+    });
+
+    on(get("f-route"), "submit", function (ev) {
+      ev.preventDefault();
+      var id = routeBot();
+      if (!id) { toast(t("msg_error"), "bot_id", true); return; }
+      post(API + "/bots/" + encodeURIComponent(id) + "/routing", {
+        source_type: get("d-src").value, source_ref: get("d-sref").value.trim(),
+        keyword_mode: get("d-mode").value,
+        keywords: get("d-keys").value.split(/[,\n]/).map(function (s) { return s.trim(); }).filter(Boolean),
+        target_type: get("d-ttype").value, target_ref: get("d-target").value.trim(),
+        template: get("d-tpl").value, quote_reply: get("d-quote").checked,
+        cooldown_seconds: Number(get("d-cool").value || 0), enabled: get("d-on").checked
+      }, function () { toast(t("msg_saved"), "routing_rule"); loadRouting(); });
+    });
+    on(get("f-rtprev"), "submit", function (ev) {
+      ev.preventDefault();
+      var id = routeBot();
+      if (!id) { toast(t("msg_error"), "bot_id", true); return; }
+      post(API + "/routing/preview", { bot_id: id, chat_type: get("v-ctype").value,
+        chat_id: Number(get("v-cid").value || 1), text: get("v-text").value }, function (d) {
+        get("v-out").textContent = json({ forwarded: d.forwarded, plans: d.plans,
+          matched_rules: d.matched_rules, status: d.status });
+        get("card-rtprev").classList.add("live");
+      });
+    });
+
+    on(get("f-export"), "submit", function (ev) {
+      ev.preventDefault();
+      var body = { bot_id: get("x-bot").value, passphrase: get("x-pass").value, inline: get("x-inline").checked };
+      if (!body.bot_id) { toast(t("msg_error"), "bot_id", true); return; }
+      post(API + "/backup/export", body, function (d) {
+        var b = d.bundle || {};
+        get("x-out").textContent = json({ sha256: b.sha256, bytes: b.bytes, file: b.file, bot_id: b.bot_id, files: b.files });
+        toast(t("msg_saved"), "backup");
+        loadBackups();
+      });
+    });
+    on(get("f-import"), "submit", function (ev) {
+      ev.preventDefault();
+      var body = { passphrase: get("i-pass").value, start: get("i-start").checked };
+      var b64 = get("i-b64").value.trim(), file = get("i-file").value.trim();
+      if (b64) body.base64 = b64;
+      else if (file) body.bundle = file;
+      else { toast(t("msg_error"), "bundle | base64", true); return; }
+      post(API + "/backup/import", body, function (d) {
+        get("i-out").textContent = json(d.bot || d);
+        toast(t("msg_saved"), "restore");
+        loadBots();
+      });
+    });
+  }
+
+  /* ================================================================== boot */
+  function localeSelectors() {
+    fillSelect(get("lang"), cur);
+    fillSelect(get("n-locale"), cur);
+    fillSelect(get("e-locale"), cur);
+  }
+  function boot() {
+    loadEmbedded();
+    cur = normalize(detect()) || CAT.fallback || "en";   /* boot never persists: only set() does */
+    document.documentElement.lang = cur;
+    localeSelectors();
+    apply();
+    get("a-base").value = apiBase() + "/api/v1";
+    get("a-base").placeholder = apiBase() + "/api/v1/getMe";
+    renderApiButtons();
+    reRender = function () {
+      renderStrip();
+      if (S.overview) { renderMetrics(S.overview); renderPluginHealth(S.overview.plugins || {}); }
+      if (S.bots.length) { renderBots(); botNames(); }
+      renderApiButtons();
+    };
+    wire();
+    S.token = readToken();
+    if (!S.token) showGate();
+    loadDashboard();
+    loadBots().then(function () { loadRules(); loadRouting(); loadPlugins(); });
+    loadConfig();
+    loadBackups();
+    loadLive().then(function () {
+      if (!loaded()) return;
+      cur = normalize(cur) || CAT.fallback;
+      document.documentElement.lang = cur;
+      localeSelectors();
+      apply();
+      if (reRender) reRender();
+    });
+  }
+  boot();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,55 @@
+# POPOPX Bot Studio — 版本忽略清单
+#
+# 原则：只忽略「生成物 / 秘密 / 本机状态」。绝不用宽泛通配掩盖源码，
+# 因此 studio/bs_main_probe.py、studio/plugin_probe*.py 这类一次性探针脚本
+# 不会被下面的任何规则吞掉（它们应当被直接删除，而不是被忽略）。
+
+# --- Python 运行产物 ---------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# 虚拟环境：start_macos.sh / install_*.sh 在仓库根创建，永不入库
+.venv/
+venv/
+
+# --- 秘密与本机配置 ----------------------------------------------------------
+# .env 含 STUDIO_ADMIN_TOKEN，权限必须为 0600（见 .env.example）
+.env
+.env.local
+.env.*.local
+# .env.example 是文档，必须保留
+!.env.example
+
+# --- 运行时状态（Studio 的 data dir）----------------------------------------
+# 默认 <repo>/var/studio：SQLite 账本 + WAL/SHM、studio.state.json、studio.key、
+# 以及每 Bot 隔离目录 var/studio/bots/<bot_id>/{cli-data,files,tmp,run-cli.sh,cli.log,cli.pid}
+# 和冷备导出 var/studio/backups/*
+var/
+
+# 即使有人把 STUDIO_DATA_DIR 指到别处，这些也不该入库
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+studio.state.json
+studio.key
+*.botbundle
+*.botbundleenc
+*.botbundle*.json
+run-cli.sh
+cli.log
+cli.pid
+
+# --- systemd / launchd 安装产物（生成于仓库之外，此处兜底）-------------------
+/popopx-bot-studio.service
+im.popopx.botstudio.plist
+
+# --- 操作系统 / 编辑器噪音 ---------------------------------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*~

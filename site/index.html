@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>POPOPX Bot Studio</title>
+<meta name="description" content="POPOPX Bot Studio — self-hosted bot factory, zero-code auto-reply and message routing, plugin gateway and Open API. Loopback only, AGPL-3.0-only.">
+<script type="application/json" id="i18n-catalog">__I18N_CATALOG_JSON__</script>
+<style>
+:root{
+  --bg:#04060a;--bg2:#070b11;--panel:#0a0e14;--line:#182130;--line2:#26313f;
+  --txt:#dce6f0;--mut:#8ea0b2;--dim:#5d6e80;--acc:#25e8c6;--acc-d:#0f9c86;--warn:#f2b53c;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans","Helvetica Neue",Arial,sans-serif;
+  --step:clamp(15px,1.05vw + 12px,19px)}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--txt);font:var(--step)/1.65 var(--sans);-webkit-text-size-adjust:100%}
+h1,h2,h3,p,dl,dd,figure{margin:0}
+a{color:inherit;text-decoration:none}
+:focus-visible{outline:2px solid var(--acc);outline-offset:3px}
+::selection{background:var(--acc-d);color:#04070a}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.wrap{max-width:1180px;margin:0 auto;padding:0 clamp(18px,4vw,44px)}
+.rule{height:9px;border-bottom:1px solid var(--line);
+  background-image:repeating-linear-gradient(90deg,var(--line) 0 1px,transparent 1px 22px)}
+header.top{position:sticky;top:0;z-index:30;background:rgba(4,6,10,.92);border-bottom:1px solid var(--line)}
+.bar{display:flex;align-items:center;gap:clamp(12px,2.4vw,30px);min-height:66px;flex-wrap:wrap}
+.brand{display:flex;align-items:baseline;gap:10px}
+.b1{font:700 13px/1 var(--mono);letter-spacing:.26em;text-transform:uppercase}
+.b2{font-size:12px;color:var(--dim)}
+nav.links{display:flex;gap:clamp(12px,2vw,26px);margin-left:auto;font:11px/1 var(--mono);
+  letter-spacing:.15em;text-transform:uppercase;color:var(--mut)}
+nav.links a:hover{color:var(--acc)}
+.lang{display:flex;align-items:center;gap:8px}
+.lang>label{font:11px/1 var(--mono);letter-spacing:.1em;color:var(--dim);cursor:pointer}
+select{background:#080c12;color:var(--txt);border:1px solid var(--line2);padding:7px 26px 7px 9px;font-size:13px;
+  appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--mut) 50%),linear-gradient(135deg,var(--mut) 50%,transparent 50%);
+  background-position:calc(100% - 14px) 13px,calc(100% - 9px) 13px;background-size:5px 5px;background-repeat:no-repeat;
+  max-width:min(210px,44vw);text-overflow:ellipsis}
+select:focus{border-color:var(--acc-d);outline:none;box-shadow:0 0 0 1px rgba(37,232,198,.3)}
+.cta{display:inline-flex;align-items:center;gap:9px;padding:13px 20px;border:1px solid var(--acc-d);
+  background:rgba(37,232,198,.1);color:var(--acc);font:600 13px/1 var(--sans);letter-spacing:.04em}
+.cta:hover{background:rgba(37,232,198,.18)}
+.cta.ghost{border-color:var(--line2);background:#0a0f16;color:var(--txt)}
+.cta.ghost:hover{border-color:var(--acc-d);color:var(--acc)}
+.cta svg{width:14px;height:14px;flex:none}
+.hero{padding:clamp(58px,11vw,140px) 0 clamp(46px,7vw,88px);position:relative}
+.eyebrow{display:flex;align-items:center;gap:11px;font:11px/1 var(--mono);letter-spacing:.2em;
+  text-transform:uppercase;color:var(--acc);margin-bottom:26px}
+.eyebrow::before{content:"";width:34px;height:1px;background:var(--acc-d)}
+h1.big{font-size:clamp(2.35rem,6.4vw,4.6rem);line-height:1.03;letter-spacing:-.028em;font-weight:700;max-width:20ch}
+.sub{font-size:clamp(1rem,1.35vw + .6rem,1.3rem);line-height:1.6;color:var(--mut);max-width:62ch;margin-top:26px}
+.actions{display:flex;gap:14px;flex-wrap:wrap;margin-top:38px}
+.specs{display:flex;flex-wrap:wrap;gap:0;margin-top:clamp(40px,6vw,70px);border-top:1px solid var(--line)}
+.spec{padding:15px 22px 15px 0;border-right:1px solid var(--line);margin-right:22px}
+.spec:last-child{border-right:0}
+.spec .k{font:10px/1.6 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--dim)}
+.spec .v{font:13px/1.5 var(--mono);color:var(--txt);overflow-wrap:anywhere}
+section{padding:clamp(52px,8vw,110px) 0}
+.sh{display:flex;align-items:flex-end;gap:18px;margin-bottom:clamp(30px,4vw,54px);
+  padding-bottom:14px;border-bottom:1px solid var(--line)}
+.sh h2{font:600 clamp(1.1rem,1.6vw + .5rem,1.5rem)/1.2 var(--sans);letter-spacing:-.01em}
+.sh .id{margin-left:auto;font:11px/1 var(--mono);letter-spacing:.2em;color:var(--dim)}
+.frow{display:grid;grid-template-columns:clamp(70px,9vw,124px) minmax(0,1fr) minmax(0,.9fr);
+  gap:clamp(16px,3vw,44px);align-items:start;padding:clamp(26px,4vw,44px) 0;border-bottom:1px solid var(--line)}
+.frow:last-of-type{border-bottom:0}
+.fidx{font:700 clamp(2.4rem,5vw,4.2rem)/.85 var(--mono);color:transparent;-webkit-text-stroke:1px var(--acc-d)}
+.frow h3{font-size:clamp(1.25rem,1.5vw + .55rem,1.9rem);line-height:1.18;letter-spacing:-.02em;margin-bottom:14px}
+.frow p{color:var(--mut);max-width:56ch}
+.ftag{display:flex;flex-direction:column;gap:9px;font:12px/1.4 var(--mono);color:var(--dim)}
+.ftag span{border:1px solid var(--line);padding:8px 11px;background:var(--panel);overflow-wrap:anywhere}
+.ftag b{color:var(--acc);font-weight:400}
+.tut{display:grid;grid-template-columns:minmax(0,300px) minmax(0,1fr);gap:clamp(20px,4vw,52px);align-items:start}
+.tabs{display:flex;flex-direction:column;gap:0;border-top:1px solid var(--line)}
+.tabs button{display:grid;grid-template-columns:auto minmax(0,1fr);gap:14px;align-items:baseline;text-align:left;
+  padding:17px 14px 17px 0;background:none;border:0;border-bottom:1px solid var(--line);color:var(--mut);
+  font:15px/1.45 var(--sans);cursor:pointer;transition:color .15s,padding-left .15s}
+.tabs button .n{font:11px/1 var(--mono);letter-spacing:.16em;color:var(--dim)}
+.tabs button:hover{color:var(--txt)}
+.tabs button[aria-selected="true"]{color:var(--acc);padding-left:12px}
+.tabs button[aria-selected="true"] .n{color:var(--acc)}
+.tabs button[aria-selected="true"]{box-shadow:inset 2px 0 0 var(--acc)}
+.prog{display:flex;align-items:center;gap:13px;margin-bottom:22px}
+.prog .track{flex:1;height:2px;background:var(--line)}
+.prog .fill{height:2px;background:var(--acc);transition:width .22s}
+.prog .cnt{font:11px/1 var(--mono);letter-spacing:.16em;color:var(--dim)}
+.panel{border:1px solid var(--line);background:var(--panel);padding:clamp(20px,3vw,34px)}
+.panel .step-id{font:11px/1.5 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--acc);margin-bottom:20px}
+.code{margin-top:0;border:1px solid var(--line);background:#06090e;overflow-x:auto}
+.code .hd{display:flex;gap:10px;padding:9px 14px;border-bottom:1px solid var(--line);
+  font:10px/1.6 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+.code .hd b{margin-left:auto;color:var(--mut);font-weight:400}
+.code pre{margin:0;padding:15px;font:12.5px/1.75 var(--mono);color:#a9c2d4;white-space:pre;tab-size:2}
+.code .t{color:var(--acc)}
+.code .k{color:var(--warn)}
+.code .c{color:var(--dim)}
+.api{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}
+.api div{background:var(--bg);padding:17px 19px}
+.api .m{font:10px/1.7 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--acc)}
+.api .m.g{color:var(--warn)}
+.api .p{font:12.5px/1.6 var(--mono);color:var(--txt);overflow-wrap:anywhere}
+.api .d{font-size:12.5px;color:var(--dim);margin-top:6px}
+footer{border-top:1px solid var(--line);padding:clamp(34px,5vw,64px) 0 44px;background:var(--bg2)}
+.fgrid{display:flex;gap:clamp(18px,4vw,50px);flex-wrap:wrap;align-items:flex-start}
+.fgrid .grow{flex:1;min-width:240px}
+.fnav{display:flex;flex-direction:column;gap:9px;font:11px/1 var(--mono);letter-spacing:.15em;text-transform:uppercase}
+.fnav a:hover{color:var(--acc)}
+.copy{margin-top:30px;padding-top:18px;border-top:1px solid var(--line);
+  font:12px/1.7 var(--mono);letter-spacing:.04em;color:var(--mut)}
+@media(max-width:900px){
+  .tut{grid-template-columns:1fr}
+  .frow{grid-template-columns:minmax(0,1fr);gap:14px}
+  .fidx{font-size:2.2rem}
+  nav.links{order:3;width:100%;margin-left:0;padding-bottom:12px;overflow-x:auto}}
+@media(max-width:600px){.specs{gap:0}.spec{border-right:0;padding-right:0;margin-right:0;width:100%;border-bottom:1px solid var(--line)}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap bar">
+    <div class="brand">
+      <span class="b1" id="brand" data-i18n="site_title">POPOPX Bot Studio</span>
+      <span class="b2" data-i18n="site_tagline">Run your own POPOPX bots on a server you control</span>
+    </div>
+    <nav class="links" aria-labelledby="brand">
+      <a href="#features" data-i18n="nav_features">Features</a>
+      <a href="#tutorial" data-i18n="nav_tutorial">Interactive tutorial</a>
+      <a href="#api" data-i18n="nav_api">Open API</a>
+      <a href="/" data-i18n="nav_admin">Open console</a>
+    </nav>
+    <div class="lang">
+      <label for="lang" id="lang-lbl">English</label>
+      <select id="lang"></select>
+    </div>
+  </div>
+</header>
+
+<main>
+<section class="wrap hero" id="top">
+  <p class="eyebrow mono">127.0.0.1 · AGPL-3.0-only</p>
+  <h1 class="big" data-i18n="hero_title">A bot factory for the identity-less messenger</h1>
+  <p class="sub" data-i18n="hero_sub">Create a bot, get its permanent address, then let rules answer, forward enquiries to your support group and open a ticket per customer. Everything runs on loopback, nothing is bundled.</p>
+  <div class="actions">
+    <a class="cta" href="/"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1l6 6-6 6-1.4-1.4L10.2 8.7H1V7.3h9.2L6.6 4.4z"/></svg><span data-i18n="cta_start">Create your first bot</span></a>
+    <a class="cta ghost" href="https://github.com/popopx-chat/popopx-bot-studio" rel="noopener"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1a7 7 0 00-2.2 13.6c.35.07.5-.15.5-.35v-1.3C4.7 13.3 4.3 12 4.3 12c-.3-.75-.75-1-.75-1-.6-.4.07-.4.07-.4.65.05 1 .65 1 .65.55 1 1.5.7 1.85.5.05-.45.25-.7.45-.85-1.4-.15-2.85-.7-2.85-3.1 0-.7.25-1.25.65-1.7-.05-.15-.3-.8.05-1.65 0 0 .55-.15 1.75.65a6 6 0 013.2 0c1.2-.8 1.75-.65 1.75-.65.35.85.1 1.5.05 1.65.4.45.65 1 .65 1.7 0 2.4-1.45 2.95-2.85 3.1.25.2.45.6.45 1.2v1.8c0 .2.15.42.5.35A7 7 0 008 1z"/></svg><span data-i18n="cta_github">Source on GitHub</span></a>
+  </div>
+  <div class="specs">
+    <div class="spec"><div class="k mono">host · port</div><div class="v">127.0.0.1:8090</div></div>
+    <div class="spec"><div class="k mono">ws_port_base</div><div class="v">ws://127.0.0.1:5230+</div></div>
+    <div class="spec"><div class="k mono">cli_bin_path</div><div class="v">/usr/local/bin/popopx-cli · not bundled</div></div>
+    <div class="spec"><div class="k mono">backup</div><div class="v">AES-GCM · sha256</div></div>
+    <div class="spec"><div class="k mono">SPDX</div><div class="v">AGPL-3.0-only</div></div>
+  </div>
+</section>
+
+<div class="wrap rule" aria-hidden="true"></div>
+
+<section class="wrap" id="features">
+  <div class="sh"><h2 data-i18n="nav_features">Features</h2><span class="id mono">01 — 03</span></div>
+
+  <article class="frow">
+    <div class="fidx" aria-hidden="true">01</div>
+    <div>
+      <h3 data-i18n="feat_1_t">Permanent address</h3>
+      <p data-i18n="feat_1_d">Each bot gets its own CLI data directory and permanent contact link, so reconnecting users always reach the same bot.</p>
+    </div>
+    <div class="ftag">
+      <span><b>POST</b> /api/admin/bots</span>
+      <span><b>POST</b> /api/admin/bots/{id}/start|stop|restart</span>
+      <span><b>GET</b> /api/admin/bots/{id}/qrcode · qr.png</span>
+    </div>
+  </article>
+
+  <article class="frow">
+    <div class="fidx" aria-hidden="true">02</div>
+    <div>
+      <h3 data-i18n="feat_2_t">No-code rules</h3>
+      <p data-i18n="feat_2_d">Match a keyword, exact phrase or regular expression and reply with a template. Cooldown keeps a chatty user from being spammed.</p>
+    </div>
+    <div class="ftag">
+      <span><b>trigger_type</b> exact · prefix · regex · default</span>
+      <span><b>cooldown_seconds</b> {sender_name} {time} {bot_name}</span>
+      <span><b>POST</b> /api/admin/rules/preview</span>
+    </div>
+  </article>
+
+  <article class="frow">
+    <div class="fidx" aria-hidden="true">03</div>
+    <div>
+      <h3 data-i18n="feat_3_t">Routing and tickets</h3>
+      <p data-i18n="feat_3_d">Forward enquiries into a support group with a #T ticket id; an operator answers with the ticket id and the reply goes back to the customer.</p>
+    </div>
+    <div class="ftag">
+      <span><b>source_type</b> direct · group · any</span>
+      <span><b>target_type</b> group · contact · broadcast</span>
+      <span><b>POST</b> /api/admin/routing/preview</span>
+    </div>
+  </article>
+</section>
+
+<div class="wrap rule" aria-hidden="true"></div>
+
+<section class="wrap" id="tutorial">
+  <div class="sh"><h2 data-i18n="nav_tutorial">Interactive tutorial</h2><span class="id mono">01 → 04</span></div>
+  <div class="tut">
+    <div class="tabs" role="tablist" aria-orientation="vertical" id="steps">
+      <button type="button" role="tab" id="tab-1" aria-controls="panel-1" aria-selected="true"><span class="n">01</span><span data-i18n="step_1">Install popopx-cli from the official releases (checksum verified) and start the studio.</span></button>
+      <button type="button" role="tab" id="tab-2" aria-controls="panel-2" aria-selected="false" tabindex="-1"><span class="n">02</span><span data-i18n="step_2">Create a bot in the console, pick its SMP servers and read the permanent address or QR code.</span></button>
+      <button type="button" role="tab" id="tab-3" aria-controls="panel-3" aria-selected="false" tabindex="-1"><span class="n">03</span><span data-i18n="step_3">Describe your support flow: add reply rules and a routing rule that targets the group.</span></button>
+      <button type="button" role="tab" id="tab-4" aria-controls="panel-4" aria-selected="false" tabindex="-1"><span class="n">04</span><span data-i18n="step_4">Call the Open API with the bot token, or let a plugin take over the conversation.</span></button>
+    </div>
+
+    <div>
+      <div class="prog" aria-hidden="true">
+        <span class="track" style="display:flex;flex:1"><span class="fill" id="fill" style="width:25%"></span></span>
+        <span class="cnt" id="count">01 / 04</span>
+      </div>
+
+      <div class="panel" role="tabpanel" id="panel-1" aria-labelledby="tab-1" tabindex="0">
+        <p class="step-id mono">GET /healthz · studio/app/main.py · requirements.txt</p>
+        <figure class="code">
+          <figcaption class="hd">sh<b>127.0.0.1</b></figcaption>
+          <pre><span class="t">$</span> pip install -r studio/requirements.txt   <span class="c"># python 3.11</span>
+<span class="t">$</span> cd studio && python3 -m app.main --port 8090
+<span class="t">$</span> curl -s http://127.0.0.1:8090/healthz
+<span class="k">{ "ok": true, "app": "popopx-bot-studio", "version": "1.0.0", "loopback_only": true }</span></pre>
+        </figure>
+      </div>
+
+      <div class="panel" role="tabpanel" id="panel-2" aria-labelledby="tab-2" tabindex="0" hidden>
+        <p class="step-id mono">POST /api/admin/bots · X-Studio-Token</p>
+        <figure class="code">
+          <figcaption class="hd">json<b>accept_incognito: false</b></figcaption>
+          <pre><span class="t">POST</span> /api/admin/bots
+{ "name": "support", "default_locale": "zh-Hans",
+  "auto_accept": true, "accept_incognito": <span class="k">false</span> }
+
+<span class="t">→</span> { "bot": { "id": "b1", "port": 5230, "permanent_link": "https://…" } }
+<span class="t">GET</span> /api/admin/bots/b1/qrcode → { "data_url": "data:image/png;base64,…" }</pre>
+        </figure>
+      </div>
+
+      <div class="panel" role="tabpanel" id="panel-3" aria-labelledby="tab-3" tabindex="0" hidden>
+        <p class="step-id mono">rules · routing · preview</p>
+        <figure class="code">
+          <figcaption class="hd">preview<b>matched_rules[]</b></figcaption>
+          <pre><span class="t">POST</span> /api/admin/bots/b1/rules
+{ "trigger_type": "prefix", "pattern": "/help",
+  "reply_text": "…", "cooldown_seconds": 60 }
+
+<span class="t">POST</span> /api/admin/bots/b1/routing
+{ "source_type": "direct", "target_type": "group",
+  "target_ref": "#1234567890", "quote_reply": true }
+
+<span class="t">POST</span> /api/admin/routing/preview
+<span class="k">{ "forwarded": true, "matched_rules": [7], "plans": [ … ] }</span></pre>
+        </figure>
+      </div>
+
+      <div class="panel" role="tabpanel" id="panel-4" aria-labelledby="tab-4" tabindex="0" hidden>
+        <p class="step-id mono">/api/v1 · PATCH /api/admin/plugins</p>
+        <figure class="code">
+          <figcaption class="hd">curl<b>Authorization: Bearer</b></figcaption>
+          <pre><span class="t">$</span> curl -sS http://127.0.0.1:8090/api/v1/sendMessage \
+    -H 'Authorization: Bearer $BOT_TOKEN' \
+    -d '{"chat_ref":"#1234567890","text":"hello"}'
+
+<span class="t">$</span> curl -sS http://127.0.0.1:8090/api/v1/bot$BOT_TOKEN/getMe
+<span class="t">PATCH</span> /api/admin/plugins/llm_bridge { "plugin_id": "llm_bridge", "enabled": true }</pre>
+        </figure>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="wrap rule" aria-hidden="true"></div>
+
+<section class="wrap" id="api">
+  <div class="sh"><h2 data-i18n="nav_api">Open API</h2><span class="id mono">/api/v1 · /api/admin</span></div>
+  <div class="api">
+    <div><p class="m">GET</p><p class="p">/api/v1/getMe</p><p class="d">bot · can_send_messages</p></div>
+    <div><p class="m">POST</p><p class="p">/api/v1/sendMessage</p><p class="d">chat_ref · text · quoted_message</p></div>
+    <div><p class="m">POST</p><p class="p">/api/v1/broadcastGroup</p><p class="d">known_groups · template</p></div>
+    <div><p class="m">POST</p><p class="p">/api/v1/setWebhook</p><p class="d">url · secret</p></div>
+    <div><p class="m">GET</p><p class="p">/api/v1/getUpdates</p><p class="d">offset · limit · timeout</p></div>
+    <div><p class="m g">GET</p><p class="p">/api/admin/overview</p><p class="d">X-Studio-Token</p></div>
+    <div><p class="m g">GET</p><p class="p">/api/admin/plugins</p><p class="d">config_fields · failures</p></div>
+    <div><p class="m g">POST</p><p class="p">/api/admin/backup/export</p><p class="d">passphrase · sha256</p></div>
+  </div>
+</section>
+</main>
+
+<footer class="wrap">
+  <div class="fgrid">
+    <div class="grow">
+      <div class="brand"><span class="b1" id="fbrand" data-i18n="site_title">POPOPX Bot Studio</span></div>
+      <p class="copy" data-i18n="site_footer">POPOPX Bot Studio · AGPL-3.0-only · self-hosted, no telemetry</p>
+    </div>
+    <nav class="fnav" aria-labelledby="fbrand">
+      <a href="#features" data-i18n="nav_features">Features</a>
+      <a href="#tutorial" data-i18n="nav_tutorial">Interactive tutorial</a>
+      <a href="#api" data-i18n="nav_api">Open API</a>
+      <a href="/" data-i18n="nav_admin">Open console</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ========================================================== i18n engine */
+  var LS_LOC = "popopx.locale", NAME = "site";
+  /* The 18 codes are the detection floor: the switcher and normalize() must work
+     before the catalog is spliced or fetched. Translations still come from CAT only. */
+  var CAT = { fallback: "en", locales: ["en", "zh-Hans", "zh-Hant", "ja", "bg", "cs", "de", "es", "fi", "fr", "hu", "it", "nl", "pl", "ru", "th", "tr", "uk"],
+            labels: { en: "English" }, admin: {}, site: {}, welcome: {} };
+  var cur = "en";
+  /* zh variants are the only tags that need mapping; anything else unknown stays
+     unsupported so detect() can keep walking the candidate list. */
+  var ALIAS = {
+    zh: "zh-Hans", "zh-cn": "zh-Hans", "zh-sg": "zh-Hans", "zh-hans": "zh-Hans", "zh-hans-cn": "zh-Hans",
+    "zh-tw": "zh-Hant", "zh-hk": "zh-Hant", "zh-mo": "zh-Hant", "zh-hant": "zh-Hant",
+    "zh-hant-tw": "zh-Hant", "zh-hant-hk": "zh-Hant"
+  };
+
+  function table() {
+    var out = {}, list = CAT.locales || [];
+    for (var i = 0; i < list.length; i++) out[String(list[i]).toLowerCase()] = list[i];
+    return out;
+  }
+
+  function normalize(tag) {
+    if (!tag) return "";
+    var t = String(tag).trim().replace(/_/g, "-").toLowerCase(), map = table();
+    if (!t) return "";
+    if (map[t]) return map[t];
+    if (ALIAS[t]) return ALIAS[t];
+    var base = t.split("-")[0];
+    return ALIAS[base] || map[base] || "";
+  }
+
+  function fromList(list) {
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i];
+      if (c === null || c === undefined) continue;
+      var arr = Object.prototype.toString.call(c) === "[object Array]" ? c : [c];
+      for (var j = 0; j < arr.length; j++) {
+        var hit = normalize(String(arr[j]).split(";")[0]);
+        if (hit) return hit;
+      }
+    }
+    return CAT.fallback || "en";
+  }
+
+  function detect(candidates) {
+    if (candidates !== undefined) return fromList([candidates]);
+    var q = "";
+    try { q = new URLSearchParams(location.search).get("locale") || ""; } catch (e) { q = ""; }
+    var stored = "";
+    try { stored = localStorage.getItem(LS_LOC) || ""; } catch (e) { stored = ""; }
+    var sel = document.getElementById("lang");
+    return fromList([q, stored, sel && sel.value, navigator.languages || [], navigator.language || ""]);
+  }
+
+  function dict(catalogName, key) {
+    var tbl = CAT[catalogName] || {}, row = tbl[cur], v = row && row[key];
+    if (typeof v === "string" && v) return v;
+    var fb = tbl[CAT.fallback || "en"];
+    if (fb && typeof fb[key] === "string" && fb[key]) return fb[key];
+    var en = tbl.en;
+    if (en && typeof en[key] === "string" && en[key]) return en[key];
+    return key;
+  }
+  function t(key) { return dict(NAME, key); }
+  function loaded() { var tbl = CAT[NAME]; return !!(tbl && tbl[CAT.fallback || "en"]); }
+
+  /* The site ships one dictionary and never phones home: an unspliced marker or a
+     missing key must still render text, so apply() keeps the source string. */
+  function apply() {
+    var live = loaded(), nodes = document.querySelectorAll("[data-i18n]");
+    for (var i = 0; i < nodes.length; i++) {
+      if (!live) continue;
+      nodes[i].textContent = dict(NAME, nodes[i].getAttribute("data-i18n"));
+    }
+    var attrs = document.querySelectorAll("[data-i18n-attr]");
+    for (var a = 0; a < attrs.length && live; a++) {
+      var pairs = attrs[a].getAttribute("data-i18n-attr").split(";");
+      for (var p = 0; p < pairs.length; p++) {
+        var ix = pairs[p].indexOf(":");
+        if (ix < 1) continue;
+        attrs[a].setAttribute(pairs[p].slice(0, ix).trim(), dict(NAME, pairs[p].slice(ix + 1).trim()));
+      }
+    }
+    var brand = document.getElementById("brand");
+    document.title = brand ? brand.textContent : "POPOPX Bot Studio";
+    var lbl = document.getElementById("lang-lbl");
+    if (lbl) lbl.textContent = (CAT.labels && CAT.labels[cur]) || cur;
+    if (lbl) lbl.setAttribute("aria-label", (CAT.labels && CAT.labels[cur]) || cur);
+    var sel = document.getElementById("lang");
+    if (sel) sel.setAttribute("aria-label", (CAT.labels && CAT.labels[cur]) || cur);
+  }
+
+  function fillSelect(sel, value) {
+    if (!sel) return sel;
+    sel.textContent = "";
+    var list = CAT.locales || [];
+    for (var i = 0; i < list.length; i++) {
+      var o = document.createElement("option");
+      o.value = list[i];
+      o.textContent = (CAT.labels && CAT.labels[list[i]]) || list[i];
+      if (list[i] === value) o.selected = true;
+      sel.appendChild(o);
+    }
+    return sel;
+  }
+
+  function set(locale) {
+    cur = normalize(locale) || CAT.fallback || "en";
+    try { localStorage.setItem(LS_LOC, cur); } catch (e) { /* private mode */ }
+    document.documentElement.lang = cur;
+    var sel = document.getElementById("lang");
+    if (sel && sel.value !== cur) sel.value = cur;
+    apply();
+  }
+
+  function loadEmbedded() {
+    var node = document.getElementById("i18n-catalog");
+    if (!node) return;
+    try {
+      var parsed = JSON.parse(node.textContent);
+      if (parsed && parsed.locales && parsed.locales.length) CAT = parsed;
+    } catch (e) { /* marker not spliced yet */ }
+  }
+
+  window.I18N = {
+    t: t, dict: dict, normalize: normalize, detect: detect,
+    catalog: function () { return CAT; }, set: set,
+    /* getter, so a test can read the active locale after set() */
+    get locale() { return cur; }
+  };
+
+  /* ============================================================ tutorial */
+  var tabs = [], panels = [], index = 0;
+
+  function showStep(n, focus) {
+    index = Math.max(0, Math.min(tabs.length - 1, n));
+    tabs.forEach(function (tab, i) {
+      tab.setAttribute("aria-selected", i === index ? "true" : "false");
+      tab.tabIndex = i === index ? 0 : -1;
+    });
+    panels.forEach(function (panel, i) { panel.hidden = i !== index; });
+    document.getElementById("fill").style.width = ((index + 1) / tabs.length * 100) + "%";
+    document.getElementById("count").textContent =
+      ("0" + (index + 1)).slice(-2) + " / " + ("0" + tabs.length).slice(-2);
+    if (focus) tabs[index].focus();
+  }
+
+  function wireTutorial() {
+    var box = document.getElementById("steps");
+    tabs = Array.prototype.slice.call(box.querySelectorAll("[role=tab]"));
+    panels = tabs.map(function (tab) { return document.getElementById(tab.getAttribute("aria-controls")); });
+    tabs.forEach(function (tab, i) {
+      tab.addEventListener("click", function () { showStep(i, false); });
+      tab.addEventListener("keydown", function (ev) {
+        var k = ev.key, last = tabs.length - 1;
+        if (k === "ArrowDown" || k === "ArrowRight") showStep(i === last ? 0 : i + 1, true);
+        else if (k === "ArrowUp" || k === "ArrowLeft") showStep(i === 0 ? last : i - 1, true);
+        else if (k === "Home") showStep(0, true);
+        else if (k === "End") showStep(last, true);
+        else return;
+        ev.preventDefault();
+      });
+    });
+    showStep(0, false);
+  }
+
+  /* ================================================================ boot */
+  function boot() {
+    loadEmbedded();
+    cur = normalize(detect()) || CAT.fallback || "en";   /* boot never persists: only set() does */
+    document.documentElement.lang = cur;
+    var sel = fillSelect(document.getElementById("lang"), cur);
+    sel.addEventListener("change", function () { set(this.value); });
+    apply();
+    wireTutorial();
+    /* #tutorial / #features / #api are section anchors the browser resolves
+       itself; the stepper always opens on step 1. */
+  }
+  boot();
+})();
+</script>
+</body>
+</html>

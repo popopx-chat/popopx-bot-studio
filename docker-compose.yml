@@ -1,0 +1,108 @@
+# POPOPX Bot Studio — 容器化部署编排（Compose v2 `docker compose`，v1 `docker-compose` 同样可解析）
+#
+# 安全前提（与仓库硬约束一致）：
+#   1. 零二进制捆绑：镜像与仓库都不含 popopx-cli 编译产物。容器内默认没有 CLI，
+#      Studio 会以「离线模式」启动（Bot 生命周期操作优雅降级，规则/路由/插件/Open API
+#      与冷备导出照常可用）。需要真实控制 Bot 进程时，见文件末尾的 CLI opt-in。
+#   2. 严格回环隔离：对宿主机只发布 127.0.0.1。0.0.0.0 与 Bot 控制端口（5230..5299）
+#      的映射全部保持注释状态 —— 解注即等于把管理后台/控制面暴露到局域网。
+#
+# 变量取自项目目录下的 .env（compose 会自动读取，语义见 .env.example）。
+#   cp .env.example .env && chmod 600 .env && docker compose config   # 先干跑校验
+
+name: popopx-bot-studio
+
+services:
+  studio:
+    image: python:3.11-slim
+    container_name: popopx-bot-studio
+    restart: unless-stopped
+    init: true
+    working_dir: /srv/popopx-bot-studio/studio
+    # 镜像里没有 requirements.txt，因此启动时先装依赖再 exec 服务。
+    # 生产建议：把 pip 层固化进你自己的镜像（FROM python:3.11-slim
+    # + COPY studio/requirements.txt + pip install -r），把本 command 换成
+    # ["python", "-m", "app.main", "--serve"] 以免每次重启都联网。
+    command:
+      - sh
+      - -ec
+      - |
+        if ! python -c "import fastapi, uvicorn, pydantic, websockets, httpx, qrcode, cryptography" >/dev/null 2>&1; then
+          echo "[studio] 依赖缺失，正在 pip install -r requirements.txt" >&2
+          pip install --no-cache-dir --disable-pip-version-check -r requirements.txt
+        fi
+        exec python -m app.main --serve --host "$$STUDIO_HOST" --port "$$STUDIO_PORT"
+    environment:
+      # 0.0.0.0 只在容器自己的 network namespace 内生效：外部能不能摸到，
+      # 完全由下面 ports: 的 127.0.0.1 前缀决定。改回 127.0.0.1 会让
+      # docker 的端口转发（DNAT 进容器 netns）落不到监听套接字上。
+      # 因此容器内用 0.0.0.0 + STUDIO_ALLOW_LAN=1，宿主侧仍严格回环。
+      STUDIO_HOST: "0.0.0.0"
+      STUDIO_ALLOW_LAN: "1"
+      # 容器内固定 8090（与 ports: 的容器侧一致）；宿主机侧端口用 STUDIO_HOST_PORT 调。
+      STUDIO_PORT: "8090"
+      # 令牌留空时 Studio 是 fail-closed 的：全部管理路由返回 401，
+      # 仅 /healthz 与静态壳可访问。切勿在版本库里写真实令牌。
+      STUDIO_ADMIN_TOKEN: "${STUDIO_ADMIN_TOKEN:-}"
+      STUDIO_DATA_DIR: /var/lib/popopx-studio
+      STUDIO_LOCALE: "${STUDIO_LOCALE:-en}"
+      CLI_BIN_PATH: "${CLI_BIN_PATH:-/usr/local/bin/popopx-cli}"
+      BOT_WS_PORT_BASE: "${BOT_WS_PORT_BASE:-5230}"
+      BOT_WS_PORT_MAX: "${BOT_WS_PORT_MAX:-5299}"
+      # 空 = 继承 CLI 内置的 smp1..8.popopx.im 双栈集群（不要在这里硬编码别的集群）。
+      BOT_SMP_SERVERS: "${BOT_SMP_SERVERS:-}"
+    volumes:
+      # 状态目录：SQLite 账本（WAL）、studio.state.json、studio.key、
+      # bots/<bot_id>/cli-data、backups/ —— 独立于只读挂载的源码。
+      - studio-data:/var/lib/popopx-studio
+      - ./studio:/srv/popopx-bot-studio/studio:ro
+    ports:
+      # ✅ 默认：仅绑宿主机回环
+      - "127.0.0.1:${STUDIO_HOST_PORT:-8090}:8090"
+      # ⛔ 显式 opt-in —— 解除注释即把管理后台暴露到所有网卡，务必先反向代理 + TLS：
+      # - "${STUDIO_HOST_PORT:-8090}:8090"
+      # ⛔ Bot 控制端口（popopx-cli 回环 WebSocket，5230..5299）默认绝不发布。
+      #    这些端口只用于容器内 Studio↔CLI 的 ws://127.0.0.1:<port> 通信；
+      #    若确实要从宿主机直连，请改用下方 network_mode: "host"（仅 Linux）
+      #    而不是把它们 publish 到 0.0.0.0：
+      # - "127.0.0.1:5230-5299:5230-5299"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8090/healthz',timeout=5).status==200 else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # 降权运行需要先把命名卷 chown 给对应 uid（docker volume 属主默认 root）：
+    #   docker run --rm -v popopx-bot-studio_studio-data:/d alpine chown -R 1000:1000 /d
+    # user: "${POPOPX_UID:-1000}:${POPOPX_GID:-1000}"
+
+volumes:
+  studio-data:
+    name: popopx-bot-studio-data
+
+# ── 可选：让容器真的能管理 popopx-cli（默认关闭，保持零二进制捆绑）────────────
+# 1) 二进制由 install_ubuntu22.sh / install_macos.sh 在宿主机按 SHA-256 校验后安装，
+#    这里只读挂载，绝不在镜像里 COPY 或下载二进制；
+# 2) Bot 的控制端口要能被 Studio 访问，最简单是共享宿主网络栈（仅 Linux）：
+#
+# services:
+#   studio:
+#     network_mode: "host"        # 此时请删除上方 ports: 段
+#     environment:
+#       STUDIO_HOST: "127.0.0.1"  # host 网络下恢复严格回环
+#       STUDIO_ALLOW_LAN: "0"
+#     volumes:
+#       - /usr/local/bin/popopx-cli:/usr/local/bin/popopx-cli:ro
