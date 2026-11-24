@@ -10,9 +10,10 @@ and an offline cold-backup tool.
   binary. At runtime it only drives external `popopx-cli` processes over
   `ws://127.0.0.1:<port>`; the installer can fetch the binary on demand into
   `/usr/local/bin/popopx-cli`, and `--no-node-download` skips that entirely.
-- Self-test gate: `python3 -m app.main --self-test` → **15 groups / 1811 real assertions /
-  0 failures / ~13 s / exit code 0**. It only needs `studio/tests/fake_popopx_cli.py`
-  (a local stand-in that speaks the same wire protocol) — no network, no SMP server.
+- Self-test gate: `python3 -m app.main --self-test` → **15 groups / 1884 real assertions /
+  0 failures / ~18 s / exit code 0**. It only needs `studio/tests/fake_popopx_cli.py`
+  (a local stand-in that speaks the same wire protocol and keeps profiles in `bot_chat.db`,
+  so it survives a restart like the real CLI) — no network, no SMP server.
 
 Chinese document: [`README.md`](README.md)
 
@@ -50,7 +51,8 @@ Isolation contract (guarded by the `supervisor`, `config` and `install` groups):
 | Console bind | `127.0.0.1:8090` by default; a non-loopback bind requires `STUDIO_ALLOW_LAN=1` or an explicit `--lan` |
 | Bot control ports | from `BOT_WS_PORT_BASE` (default 5230, ceiling 5299), loopback only |
 | Bot data directory | `<STUDIO_DATA_DIR>/bots/<bot_id>/cli-data`, dirs `0700`, files `0600` |
-| Launch wrapper | `run-cli.sh` (`#!/bin/sh` with per-token `shlex.quote`, so quote-stripping supervisors cannot split it), keeps `0755` |
+| Launch wrapper | `run-cli.sh` (`#!/bin/sh` with per-token `shlex.quote`, so quote-stripping supervisors cannot split it), keeps `0755`; carries `--user-display-name <profile>` only while cli-data is still empty, so a headless start never blocks on the interactive prompt |
+| Bot profile | provisioning and restarts reuse the stored profile via `/user` → `/users` → `/_user <id>`; `/_create user` is never sent twice |
 | SMP cluster | inherits the binary's built-in `smp1..8.popopx.im`, override with `BOT_SMP_SERVERS` |
 | Credentials | `STUDIO_ADMIN_TOKEN` is read from `.env` (0600) or the environment only — never inlined into the plist or unit file |
 
@@ -103,12 +105,21 @@ systemctl status popopx-bot-studio
 
 `native` creates the `popopx-studio` system user, a Python 3.11 venv and
 `/etc/systemd/system/popopx-bot-studio.service` (`Environment=STUDIO_HOST=127.0.0.1`).
+The service user's primary group always comes from `--group` (defaulting to `--user`):
+`groupadd --system --force` pre-creates it, `useradd --system --gid <group>` uses it, and an
+existing user whose primary group differs is converged with `usermod -g` — a matching user is
+left alone. `useradd -U/--user-group` is deliberately not used: it creates a group named after
+the user and silently bypasses `--group`, after which `Group=` in the unit and the ownership of
+the data directory point at a group the service user is not a member of. systemd only checks
+that the group exists, so the mismatch produces no error at all. `--check` re-verifies the
+primary group, that the group exists in the group database, and the owning group of
+`STUDIO_DATA_DIR`, printing the correcting command when they diverge.
 `dev` only builds the venv plus `.env` and can run unprivileged. Both installers accept:
 
 | Flag | Effect |
 | --- | --- |
 | `--dry-run` / `-n` | print all planned actions; no writes, no downloads |
-| `--check` | diagnose layout, python, dependencies, `.env` mode, CLI, bind address, service unit |
+| `--check` | diagnose layout, python, dependencies, `.env` mode, CLI, bind address, service unit, and whether the service user's primary group and the data directory's owning group match `--group` |
 | `--uninstall` | remove the service (keeps `.env`, data directory and CLI) |
 | `--no-node-download` | do not download `popopx-cli`; Studio then runs in offline-degraded mode |
 | `--lan` (macOS) | explicitly bind `0.0.0.0` and set `STUDIO_ALLOW_LAN=1` |
@@ -219,9 +230,9 @@ cd studio
 | --- | --- | --- |
 | `config` | 62 | environment parsing, loopback constraint, permission warnings |
 | `database` | 110 | ledger CRUD, migrations, soft delete, plugin config |
-| `ws_protocol` | 90 | line-protocol frames, command grammar, errors and timeouts |
-| `supervisor` | 74 | port allocation, isolated dirs, wrapper, reconnect backoff |
-| `provisioning` | 47 | Bot creation, `/_address`, name and avatar retention |
+| `ws_protocol` | 103 | line-protocol frames, command grammar, probe commands and error-frame wake-ups, errors and timeouts |
+| `supervisor` | 86 | port allocation, isolated dirs, wrapper and first-launch profile name, reconnect backoff |
+| `provisioning` | 66 | Bot creation, `/_address`, name and avatar retention, restart and cold-restore idempotency |
 | `rules` | 60 | exact/prefix/regex/default matching and priority |
 | `router` | 78 | keyword routing, ticket ids, templates and cooldown |
 | `gateway` | 94 | inbound pipeline, plugin dispatch, update buffer |
@@ -231,7 +242,7 @@ cd studio
 | `i18n` | 320 | 18-locale completeness, negotiation, welcome text, page injection |
 | `web_live` | 55 | real ASGI lifecycle, WebSocket, cold-backup round trip |
 | `bundle` | 250 | export/verify/tamper/cross-ledger migration/idempotency |
-| `install` | 212 | script syntax and flags, dry runs, loopback and zero-bundling, no stubs |
+| `install` | 241 | script syntax and flags, dry runs, service-user primary group vs `--group` (including a stubbed real run of `create_service_user`), loopback and zero-bundling, no stubs |
 
 ## 9. Operations and security notes
 
@@ -244,6 +255,15 @@ cd studio
 - Never use the non-existent `/address` or `/auto_accept` commands; addresses and incognito
   handling go through `/_address 1` and `/_address_settings 1 {...}`, keeping
   `acceptIncognito` at `false` so the Bot retains its own name and avatar.
+- Profile ownership is decided by the `/users` list, never by error wording: `/user` may answer
+  with a `noActiveUser` error frame *or* an `activeUser` frame carrying `user: null`, and both
+  shapes must fall back to `/users` plus `/_user <id>` to reactivate the stored profile. While a
+  profile exists, `/_create user` is never sent (`CreateActiveUser` answers `userExists`), and
+  renaming a Bot never silently overwrites the existing card.
+- A restored cold backup brings its own profile, so `boot()` after a Studio restart and a
+  Web-side restart of the same Bot must both reuse it. `--user-display-name` is injected on the
+  first launch of an empty cli-data only: keeping it resident would turn "rename this Bot" into
+  "the CLI never starts again".
 
 ## 10. Licence
 

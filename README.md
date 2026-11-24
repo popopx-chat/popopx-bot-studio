@@ -8,8 +8,8 @@
 - 零二进制捆绑：本仓库不包含、不下载分发任何 `popopx-chat` 编译产物；运行期只通过
   `ws://127.0.0.1:<port>` 驱动外部 `popopx-cli` 进程，二进制由安装脚本按需拉取到
   `/usr/local/bin/popopx-cli`，或用 `--no-node-download` 完全跳过。
-- 自检门禁：`python3 -m app.main --self-test` → **15 组 / 1811 条真实断言 / 0 失败 / 约 13 秒 / 退出码 0**，
-  只依赖 `studio/tests/fake_popopx_cli.py`（同样讲真协议的本地替身），不联网、不连 SMP。
+- 自检门禁：`python3 -m app.main --self-test` → **15 组 / 1884 条真实断言 / 0 失败 / 约 18 秒 / 退出码 0**，
+  只依赖 `studio/tests/fake_popopx_cli.py`（同样讲真协议、且把 profile 存在 `bot_chat.db` 里的有状态替身），不联网、不连 SMP。
 
 English document: [`README.en.md`](README.en.md)
 
@@ -47,7 +47,8 @@ English document: [`README.en.md`](README.en.md)
 | 控制台监听 | 默认 `127.0.0.1:8090`，`STUDIO_ALLOW_LAN=1` 或显式 `--lan` 才允许非回环 |
 | Bot 控制端口 | `BOT_WS_PORT_BASE` 起（默认 5230，上限 5299），只绑回环 |
 | Bot 数据目录 | `<STUDIO_DATA_DIR>/bots/<bot_id>/cli-data`，目录 `0700`、文件 `0600` |
-| 启动包装 | `run-cli.sh`（`#!/bin/sh` + 逐 token `shlex.quote`，防 systemd/launchd 剥引号拆词），保留 `0755` |
+| 启动包装 | `run-cli.sh`（`#!/bin/sh` + 逐 token `shlex.quote`，防 systemd/launchd 剥引号拆词），保留 `0755`；仅当 cli-data 为空库时额外带 `--user-display-name <名片>`，避免无 TTY 卡在交互提问 |
+| Bot 名片 | 开通与重启都先 `/user` → `/users` → `/_user <id>` 复用既有 profile，绝不重复 `/_create user` |
 | SMP 集群 | 继承二进制内置 `smp1..8.popopx.im`，`BOT_SMP_SERVERS` 可覆写 |
 | 凭据 | `STUDIO_ADMIN_TOKEN` 只从 `.env`（0600）或环境读取，绝不写进 plist/unit 明文 |
 
@@ -99,12 +100,18 @@ systemctl status popopx-bot-studio
 
 `native` 模式创建 `popopx-studio` 专用系统用户、Python 3.11 venv 与
 `/etc/systemd/system/popopx-bot-studio.service`（`Environment=STUDIO_HOST=127.0.0.1`）。
+服务用户的主组一律取 `--group`（默认与 `--user` 同名）：`groupadd --system --force` 预建组，
+`useradd --system --gid <group>` 建用户；用户已存在但主组不符时用 `usermod -g` 纠正，
+一致时不动。这里不用 `useradd -U/--user-group`——它会另建一个与用户名同名的组做主组，
+`--group` 被绕开后，单元的 `Group=` 与数据目录属组就成了该用户不属于的组，
+而 systemd 只要组存在就不报错，错配完全是静默的。`--check` 会复核主组、`/etc/group`
+里的组存在性以及 `STUDIO_DATA_DIR` 属组，并在不符时给出纠正命令。
 `dev` 模式只做 venv + `.env`，非 root 可跑。两个安装器都支持：
 
 | 旗标 | 作用 |
 | --- | --- |
 | `--dry-run` / `-n` | 打印全部计划动作，不写文件、不联网下载 |
-| `--check` | 只诊断布局、python、依赖、`.env` 权限、CLI、监听地址、服务单元 |
+| `--check` | 只诊断布局、python、依赖、`.env` 权限、CLI、监听地址、服务单元，以及服务用户主组与数据目录属组是否与 `--group` 一致 |
 | `--uninstall` | 摘除服务（保留 `.env`、数据目录与 CLI） |
 | `--no-node-download` | 不下载 `popopx-cli`；缺二进制时 Studio 离线降级运行 |
 | `--lan`（macOS） | 显式绑定 `0.0.0.0` 并置 `STUDIO_ALLOW_LAN=1` |
@@ -203,9 +210,9 @@ cd studio
 | --- | --- | --- |
 | `config` | 62 | 环境解析、回环约束、权限告警 |
 | `database` | 110 | 账本 CRUD、迁移、软删除、插件配置 |
-| `ws_protocol` | 90 | 行协议帧、指令语法、异常与超时 |
-| `supervisor` | 74 | 端口分配、隔离目录、包装脚本、重连退避 |
-| `provisioning` | 47 | 建 Bot、`/_address`、名称与头像保留 |
+| `ws_protocol` | 103 | 行协议帧、指令语法、探活命令与错误帧唤醒、异常与超时 |
+| `supervisor` | 86 | 端口分配、隔离目录、包装脚本与首启名片、重连退避 |
+| `provisioning` | 66 | 建 Bot、`/_address`、名称与头像保留、复启与冷备复活幂等 |
 | `rules` | 60 | exact/prefix/regex/default 匹配与优先级 |
 | `router` | 78 | 关键词路由、工单号、模板与冷却 |
 | `gateway` | 94 | 入站管线、插件派发、更新缓冲 |
@@ -215,7 +222,7 @@ cd studio
 | `i18n` | 320 | 18 语种完整性、协商、欢迎语、页面注入 |
 | `web_live` | 55 | 真实 ASGI 生命周期、WebSocket、冷备往返 |
 | `bundle` | 250 | 冷备导出/校验/篡改/跨账本迁移/幂等 |
-| `install` | 212 | 脚本语法与旗标、干跑、回环与零二进制捆绑、无桩残留 |
+| `install` | 241 | 脚本语法与旗标、干跑、服务用户主组与 `--group` 一致性（含真跑 `create_service_user` 的无桩探针）、回环与零二进制捆绑、无桩残留 |
 
 ## 9. 运维与安全注意
 
@@ -226,6 +233,12 @@ cd studio
 - 严禁使用不存在的 `/address`、`/auto_accept` 指令；地址与接受隐身一律走
   `/_address 1`、`/_address_settings 1 {...}`，且 `acceptIncognito` 保持 `false`
   以保留 Bot 自身名称与头像。
+- 名片归属只以 `/users` 列表裁定，不采信错误文案：`/user` 在无活动 profile 时可能回
+  `noActiveUser` 错误帧，也可能回 `activeUser` 且 `user: null`，两种形态都必须退到
+  `/users` + `/_user <id>` 复用既有名片。库里已有 profile 时绝不发 `/_create user`
+  （`CreateActiveUser` 会回 `userExists`），改名也不会静默覆盖既有名片。
+- 冷备还原后的 cli-data 带的是原 profile，Studio 重启（`boot()`）与 Web 端重启同一个 Bot
+  都必须直接复用；`--user-display-name` 只在空库首启注入，常驻会让「改名」变成「CLI 起不来」。
 
 ## 10. 许可
 

@@ -54,6 +54,8 @@ from .ws_protocol import (
 CLI_BIN_NAME = "popopx-cli"
 BUILTIN_SMP_SERVERS: Tuple[str, ...] = tuple(f"smp{i}.popopx.im" for i in range(1, 9))
 DB_PREFIX_NAME = "bot"
+# popopx-chat Options/SQLite.hs:73,87 - the CLI appends this suffix to --database.
+CHAT_DB_SUFFIX = "_chat.db"
 WRAPPER_NAME = "run-cli.sh"
 LOG_NAME = "cli.log"
 
@@ -168,6 +170,7 @@ def build_cli_argv(
     *,
     smp_servers: Sequence[str] = (),
     log_level: str = "important",
+    profile_name: str = "",
 ) -> List[str]:
     """The exact argv used both by the wrapper script and by ``exec``."""
     if not 1 <= int(port) <= 65535:
@@ -185,12 +188,36 @@ def build_cli_argv(
         "--log-level",
         log_level,
     ]
+    if str(profile_name or "").strip():
+        argv += ["--user-display-name", str(profile_name).strip()]
     servers = [str(server).strip() for server in smp_servers if str(server).strip()]
     if servers:
         # The CLI documents a single ``--server`` option holding a space-separated
         # quoted list, so the whole list has to survive as one argv token.
         argv += ["--server", " ".join(servers)]
     return argv
+
+
+def bot_display_name(bot: Dict[str, Any], fallback: str = "") -> str:
+    return str(bot.get("display_name") or bot.get("name") or fallback).strip()
+
+
+def profile_bootstrap_name(paths: BotPaths, display_name: str) -> str:
+    """``--user-display-name`` for an empty cli-data directory, else ``""``.
+
+    With no profile yet the CLI asks for a name on stdin, which is DEVNULL for
+    a supervised process (``--headless`` would refuse instead but requires
+    ``--relay``, popopx-chat Options.hs:361). Passing the name only before the
+    database exists is deliberate: once a profile is stored the CLI exits when
+    the argument disagrees with it (Core.hs:79-82), so a permanent flag would
+    turn "rename this Bot" into "the CLI never starts again".
+    """
+    name = str(display_name or "").strip()
+    if not name:
+        return ""
+    if Path(f"{paths.db_prefix}{CHAT_DB_SUFFIX}").exists():
+        return ""
+    return name
 
 
 def render_wrapper_script(argv: Sequence[str], *, bot_id: str, paths: BotPaths) -> str:
@@ -540,7 +567,13 @@ class BotSupervisor:
                 "请先调用 adopt_orphans 释放端口，或调大 BOT_WS_PORT_BASE"
             )
         paths = runtime.paths.create()
-        argv = build_cli_argv(binary, runtime.port, paths, smp_servers=effective_smp_servers(bot, self.settings))
+        argv = build_cli_argv(
+            binary,
+            runtime.port,
+            paths,
+            smp_servers=effective_smp_servers(bot, self.settings),
+            profile_name=profile_bootstrap_name(paths, bot_display_name(bot, runtime.bot_id)),
+        )
         write_wrapper(paths, render_wrapper_script(argv, bot_id=runtime.bot_id, paths=paths))
         runtime.argv = argv
         env = dict(os.environ)
@@ -622,7 +655,7 @@ class BotSupervisor:
         bot = self.db.get_bot(runtime.bot_id)
         if bot is None:
             raise BotSupervisorError(f"Bot {runtime.bot_id} 不存在")
-        display_name = str(bot.get("display_name") or bot.get("name") or runtime.bot_id)
+        display_name = bot_display_name(bot, runtime.bot_id)
         settings = self.address_settings(bot)
 
         user_id = await client.ensure_user(display_name)

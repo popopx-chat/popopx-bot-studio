@@ -100,6 +100,21 @@ def cmd_create_user(display_name: str, *, full_name: str = "", bio: str = "", pe
     return f"/_create user {_json_arg({'profile': profile})}"
 
 
+def cmd_show_active_user() -> str:
+    """``/user`` - read the profile the CLI started with (no network usage)."""
+    return "/user"
+
+
+def cmd_list_users() -> str:
+    """``/users`` - list every profile stored in this cli-data database."""
+    return "/users"
+
+
+def cmd_set_active_user(user_id: Any) -> str:
+    """``/_user`` - make an existing profile the active one again."""
+    return f"/_user {_require_user_id(user_id)}"
+
+
 def cmd_update_profile(user_id: Any, profile: Dict[str, Any]) -> str:
     """``/_profile`` - set bot commands menu, avatar or bio."""
     return f"/_profile {_require_user_id(user_id)} {_json_arg(profile)}"
@@ -542,6 +557,18 @@ def extract_user_id(payload: Dict[str, Any]) -> Optional[int]:
     return _int_or_none(_first(payload.get("user") or {}, "userId"))
 
 
+def extract_user_name(payload: Dict[str, Any]) -> str:
+    """Name of a ``User`` object, or of the ``user`` wrapped in a ``usersList`` entry."""
+    user = payload.get("user")
+    if not isinstance(user, dict):
+        user = payload if isinstance(payload, dict) else {}
+    profile = user.get("profile")
+    name = _first(user, "localDisplayName") or ""
+    if not name and isinstance(profile, dict):
+        name = _first(profile, "displayName", "fullName") or ""
+    return str(name or "")
+
+
 def extract_address_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     container = _first(payload, "contactLink", "connLinkContact") or {}
     if isinstance(container, dict):
@@ -683,7 +710,10 @@ class CLIWebSocketClient:
         try:
             async for message in self._ws:
                 frame = decode_frame(message)
-                if frame.kind == "response" and frame.corr_id:
+                # ``decode_frame`` gives a correlated ``chatCmdError`` kind="error", so
+                # matching only "response" here would leave ``is_error`` below dead and
+                # every CLI-side failure waiting out the full timeout.
+                if frame.corr_id and frame.kind in ("response", "error"):
                     future = self._pending.pop(frame.corr_id, None)
                     if future is None or future.done():
                         continue
@@ -747,7 +777,50 @@ class CLIWebSocketClient:
         return payload
 
     # ------------------------------------------------------- high-level verbs
+    async def get_active_user(self, *, timeout: Optional[float] = None) -> Optional[int]:
+        """The active profile's userId, or None when cli-data holds no profile yet.
+
+        An empty database answers ``/user`` with ``chatCmdError``; builds that
+        reply ``activeUser`` with a null ``user`` are read the same way. Command
+        errors are the only thing swallowed here - a dropped connection still
+        raises, because guessing "no user" on a transport failure is how two
+        profiles get created for one Bot.
+        """
+        try:
+            payload = await self.request(cmd_show_active_user(), timeout=timeout)
+        except CLICommandError:
+            return None
+        return extract_user_id(payload)
+
+    async def list_users(self, *, timeout: Optional[float] = None) -> List[Dict[str, Any]]:
+        try:
+            payload = await self.expect_types(cmd_list_users(), ("usersList",), timeout=timeout)
+        except CLICommandError:
+            return []
+        users = payload.get("users") or []
+        return list(users) if isinstance(users, list) else []
+
     async def ensure_user(self, display_name: str, *, full_name: str = "", bio: str = "") -> int:
+        """Return the Bot's userId, creating the profile only when none exists.
+
+        ``/_create user`` answers ``UserExists`` the moment cli-data already holds
+        a profile (popopx-chat ``bots/api/COMMANDS.md``, CreateActiveUser), so
+        every path that re-runs provisioning - ``boot()`` after a reboot,
+        ``restart_bot``, restoring a cold backup - has to reuse it. Whether to
+        create is decided by ``/users``, never by matching error wording, and an
+        existing profile keeps its own name: renaming a Bot is never pushed down.
+        """
+        user_id = await self.get_active_user()
+        if user_id is not None:
+            return user_id
+        known = [entry for entry in await self.list_users() if extract_user_id(entry) is not None]
+        if known:
+            # One profile per isolated cli-data dir, so any hit belongs to this
+            # Bot; the name match only wins the tie-break.
+            wanted = next((e for e in known if extract_user_name(e) == display_name), known[0])
+            existing = int(extract_user_id(wanted) or 0)
+            payload = await self.expect_types(cmd_set_active_user(existing), ("activeUser",))
+            return extract_user_id(payload) or existing
         payload = await self.expect_types(
             cmd_create_user(display_name, full_name=full_name, bio=bio), ("activeUser",)
         )

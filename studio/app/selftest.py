@@ -36,12 +36,15 @@ from .bot_supervisor import (
     BUILTIN_SMP_SERVERS,
     BUNDLE_VERSION,
     BotRuntime,
+    CHAT_DB_SUFFIX,
     build_cli_argv,
+    bot_display_name,
     derive_bundle_key,
     decrypt_bundle,
     effective_smp_servers,
     encrypt_bundle,
     parse_chat_ref,
+    profile_bootstrap_name,
     render_wrapper_script,
     resolve_cli_binary,
     sha256_bytes,
@@ -177,8 +180,11 @@ from .ws_protocol import (
     cmd_create_group,
     cmd_create_group_link,
     cmd_list_contacts,
+    cmd_list_users,
     cmd_send_message,
     cmd_send_plain_text,
+    cmd_set_active_user,
+    cmd_show_active_user,
     cmd_show_address,
     cmd_short_link_address,
     decode_frame,
@@ -186,6 +192,7 @@ from .ws_protocol import (
     extract_created_link,
     extract_group_id,
     extract_user_id,
+    extract_user_name,
     flatten_error,
     normalize_event,
     normalize_new_chat_items,
@@ -701,6 +708,25 @@ def group_ws_protocol(test: SelfTest, h: Harness) -> None:
     t.raises("负 userId", WebSocketProtocolError, cmd_create_address, -3)
     t.eq("字符串数字可用", cmd_show_address("7"), "/_show_address 7")
 
+    # 探活命令必须与真实协议同名：/user、/users、/_user（popopx-chat Commands.hs:196,205,2705）。
+    t.eq("读当前 profile 命令", cmd_show_active_user(), "/user")
+    t.eq("列出全部 profile 命令", cmd_list_users(), "/users")
+    t.eq("激活既有 profile 命令", cmd_set_active_user(7), "/_user 7")
+    t.raises("/_user 非法 userId", WebSocketProtocolError, cmd_set_active_user, "abc")
+    t.ne("严禁臆造的 /active_user 探活命令", cmd_show_active_user(), "/active_user")
+    t.eq("activeUser 取 userId", extract_user_id({"type": "activeUser", "user": {"userId": 9}}), 9)
+    t.eq("user 为 null 时取不到 userId", extract_user_id({"type": "activeUser", "user": None}), None)
+    t.eq("usersList 的包裹结构同样可读", extract_user_id({"user": {"userId": 3}, "unreadCount": 0}), 3)
+    t.eq("取 localDisplayName", extract_user_name({"user": {"localDisplayName": "客服"}}), "客服")
+    t.eq("无 localDisplayName 时退到 profile",
+         extract_user_name({"user": {"profile": {"displayName": "名片名"}}}), "名片名")
+    t.eq("user 为 null 时名字为空", extract_user_name({"user": None}), "")
+    no_active = decode_frame(json.dumps(
+        {"corrId": "c1", "resp": {"type": "chatCmdError",
+                                  "chatError": {"type": "error", "errorType": {"type": "noActiveUser"}}}}))
+    t.eq("noActiveUser 是错误帧", no_active.is_error, True)
+    t.eq("错误帧保留 corrId 以便唤醒等待者", no_active.corr_id, "c1")
+
     settings = build_address_settings(business_address=True, auto_accept=True, accept_incognito=False, welcome_text="欢迎")
     t.eq("businessAddress 为真", settings["businessAddress"], True)
     t.eq("autoAccept 结构", settings["autoAccept"], {"acceptIncognito": False})
@@ -873,6 +899,21 @@ def group_supervisor(test: SelfTest, h: Harness) -> None:
     t.raises("端口越界拒绝", BotSupervisorError, build_cli_argv, h.cli_bin, 0, paths)
     t.raises("端口上限拒绝", BotSupervisorError, build_cli_argv, h.cli_bin, 70000, paths)
 
+    # --user-display-name 只能在空库首启给：库里已有 profile 而名字不符时 CLI 直接退出
+    # （popopx-chat Core.hs:79-82），常驻这个参数会把「改名」变成「再也起不来」。
+    named = build_cli_argv(h.cli_bin, 5231, paths, profile_name="客服")
+    t.contains("首启 argv 含 --user-display-name", " ".join(named), "--user-display-name 客服")
+    t.eq("引导名是独立的 argv token", named[named.index("--user-display-name") + 1], "客服")
+    t.check("默认不带该参数", "--user-display-name" not in plain, str(plain))
+    t.check("纯空白引导名不注入", "--user-display-name" not in build_cli_argv(h.cli_bin, 5231, paths, profile_name="   "), "空白名也被注入")
+    t.eq("空库时给出引导名", profile_bootstrap_name(paths, "客服"), "客服")
+    Path(f"{paths.db_prefix}{CHAT_DB_SUFFIX}").write_bytes(b"SQLite format 3\x00")
+    t.eq("库已存在则不再给名字", profile_bootstrap_name(paths, "客服"), "")
+    t.eq("空名字不给引导", profile_bootstrap_name(paths, "  "), "")
+    t.eq("display_name 优先于 name", bot_display_name({"display_name": "客服", "name": "cs_th"}), "客服")
+    t.eq("无 display_name 时退到 name", bot_display_name({"name": "cs_th"}), "cs_th")
+    t.eq("两者皆空时用兜底", bot_display_name({}, "bot_x"), "bot_x")
+
     script = render_wrapper_script(overridden, bot_id="bot_demo", paths=paths)
     t.contains("shebang 是 sh", script, "#!/bin/sh")
     t.contains("严格模式", script, "set -eu")
@@ -882,6 +923,11 @@ def group_supervisor(test: SelfTest, h: Harness) -> None:
     t.contains("exec 让 CLI 成为主进程", script, "\nexec ")
     t.check("剥引号后仍不拆词", server_token in script, "缺少带空格的 SMP 列表")
     t.raises("空 argv 拒绝", BotSupervisorError, render_wrapper_script, [], bot_id="x", paths=paths)
+    named_script = render_wrapper_script(named, bot_id="bot_demo", paths=paths)
+    # exec 行是「反斜杠续行 + 两空格缩进」逐个写参数的，展平之后才能对照 argv 断言。
+    flat_script = " ".join(named_script.replace("\\\n", " ").split())
+    t.contains("包装脚本也带引导名", flat_script, "--user-display-name '客服'")
+    t.contains("包装脚本逐参数续行", named_script, " \\\n  ")
     written = write_wrapper(paths, script)
     t.eq("包装脚本权限 0755", mode_of(written), 0o755)
 
@@ -985,6 +1031,37 @@ def group_provisioning(test: SelfTest, h: Harness) -> None:
         t.check(label, condition, detail)
 
 
+def _fake_cli_magic() -> Tuple[bytes, bytes]:
+    """替身存在 ``bot_chat.db`` 里的状态魔数：只从替身取，避免自检与替身各写一份。"""
+    tests_dir = str(ROOT / "tests")
+    if tests_dir not in sys.path:
+        sys.path.insert(0, tests_dir)
+    from fake_popopx_cli import DB_HEADER, STATE_TAG  # noqa: PLC0415
+
+    return DB_HEADER, STATE_TAG
+
+
+def _fake_cli_profile_db(paths: BotPaths) -> Path:
+    return Path(f"{paths.db_prefix}{CHAT_DB_SUFFIX}")
+
+
+def fake_cli_state(paths: BotPaths) -> Dict[str, Any]:
+    """读替身 CLI 的 profile 表——真 CLI 也把它存在同一个 ``bot_chat.db`` 里。"""
+    _, tag = _fake_cli_magic()
+    raw = _fake_cli_profile_db(paths).read_bytes()
+    at = raw.rfind(tag)
+    if at < 0:
+        return {"users": [], "active": None}
+    return json.loads(raw[at + len(tag):].decode("utf-8"))
+
+
+def seed_fake_cli_state(paths: BotPaths, users: List[Dict[str, Any]], active: Any) -> None:
+    """把 cli-data 写成冷备还原后的形状：库里有 profile，但 active 指针为空。"""
+    header, tag = _fake_cli_magic()
+    body = header + tag + json.dumps({"users": users, "active": active}).encode("utf-8")
+    _fake_cli_profile_db(paths).write_bytes(body)
+
+
 async def live_provisioning(stack: StudioStack) -> List[Tuple[str, Any, str]]:
     out: List[Tuple[str, Any, str]] = []
     sup = stack.supervisor
@@ -1071,6 +1148,60 @@ async def live_provisioning(stack: StudioStack) -> List[Tuple[str, Any, str]]:
     untouched = await sup.create_bot("draft_only", start=False)
     out.append(("不启动时保持 draft", untouched["status"] == "draft", untouched["status"]))
     out.append(("不启动时无二维码", untouched["qr_png"] == "", str(untouched["qr_png"])[:20]))
+
+    # ------------------------------------------------------------------ 幂等复启
+    # 替身是有状态的：profile 存在 cli-data 的 bot_chat.db 里，和真 CLI 一样活得过进程重启。
+    # 旧实现每次开通都发 /_create user，第二次必撞 userExists —— 生产表现是「Bot 一重启就起不来」。
+    paths = sup.paths_for(bot_id)
+    first = fake_cli_state(paths)
+    out.append(("首启只落一个 profile", len(first["users"]) == 1, str(first)))
+    out.append(("profile 名取 display_name", bool(first["users"]) and first["users"][0]["localDisplayName"] == "客服", str(first)))
+    out.append(("首启把 profile 设为 active", first["active"] == first["users"][0]["userId"], str(first)))
+    wrapper = paths.wrapper.read_text()
+    out.append(("首启包装脚本带引导名", "--user-display-name" in wrapper, wrapper[-160:]))
+    out.append(("引导名在脚本里被引号包住", "'客服'" in wrapper, wrapper[-160:]))
+
+    link_before = stack.db.get_bot(bot_id)["permanent_link"]
+    await sup.stop_bot(bot_id)
+    await sup.start_bot(bot_id, provision=True)
+    second = fake_cli_state(paths)
+    row2 = stack.db.get_bot(bot_id)
+    out.append(("二次启动状态为 running", row2["status"] == "running", str(row2["status"])))
+    out.append(("二次启动不新增 profile", len(second["users"]) == 1, str(second)))
+    out.append(("二次启动复用同一 userId", second["active"] == first["active"], f"{second['active']} vs {first['active']}"))
+    out.append(("二次启动永久链接不变", row2["permanent_link"] == link_before, str(row2["permanent_link"])))
+    out.append(("二次启动后 /user 读到同一 profile", await sup.client_for(bot_id).get_active_user() == first["active"], "读不到"))
+
+    # 冷备还原：库里已有名片但 active 指针为空 —— /user 只会回 noActiveUser，必须靠 /users 裁定。
+    await sup.stop_bot(bot_id)
+    seed_fake_cli_state(paths, [{"userId": 3, "localDisplayName": "客服", "displayName": "客服"}], None)
+    await sup.start_bot(bot_id, provision=True)
+    revived = fake_cli_state(paths)
+    out.append(("复活沿用既有 userId", revived["active"] == 3, str(revived)))
+    out.append(("复活不新建第二个 profile", len(revived["users"]) == 1, str(revived)))
+    out.append(("复活后 /user 读到还原的名片", await sup.client_for(bot_id).get_active_user() == 3, "未激活"))
+
+    # 错误帧必须在收到时就交给等待者：旧读循环只认 kind=="response"，
+    # 每个 CLI 侧错误都要干等到超时（生产表现为「命令卡 20 秒」）。
+    out.append(("控制通道带连接超时", sup.client_for(bot_id).connect_timeout > 0,
+                str(sup.client_for(bot_id).connect_timeout)))
+    boom_start = time.monotonic()
+    try:
+        await sup.client_for(bot_id).send_command("/_boom", timeout=8.0)
+        out.append(("错误帧立即抛 CLICommandError", False, "未抛错"))
+    except CLITimeoutError:
+        out.append(("错误帧立即抛 CLICommandError", False, "拖到超时：读循环没把 chatCmdError 交给等待者"))
+    except CLICommandError:
+        out.append(("错误帧立即抛 CLICommandError", True, ""))
+    out.append(("错误帧不拖满超时", time.monotonic() - boom_start < 4.0, f"{time.monotonic() - boom_start:.2f}s"))
+
+    # Studio 重启后的自愈：boot() 只拉起库里标着 running 的 Bot，且必须一次成功。
+    await sup.stop_bot(bot_id)
+    stack.db.update_bot(bot_id, status="running")
+    resumed = await sup.boot(auto_start_statuses=("running",))
+    out.append(("boot() 拉起 running 的 Bot", bot_id in resumed["started"], str(resumed)))
+    out.append(("boot() 无失败项", resumed["failed"] == {}, str(resumed["failed"])))
+    out.append(("boot() 后仍是一个 profile", len(fake_cli_state(paths)["users"]) == 1, str(fake_cli_state(paths))))
     await sup.stop_bot(bot_id)
     await sup.remove_bot(bot_id, purge_files=True)
     await sup.remove_bot(untouched["id"], purge_files=True)
@@ -3335,6 +3466,86 @@ def run_bash(args: Sequence[str], *, timeout: int = 300) -> subprocess.Completed
     )
 
 
+def shell_function_body(path: Path, name: str) -> str:
+    """取出 shell 脚本里某个函数的源码（到首个顶格 ``}`` 为止）。"""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    start = next((i for i, line in enumerate(lines) if line.startswith(f"{name}()")), None)
+    if start is None:
+        return ""
+    for i in range(start + 1, len(lines)):
+        if lines[i] == "}":
+            return "\n".join(lines[start:i])
+    return "\n".join(lines[start:])
+
+
+def code_only(body: str) -> str:
+    """丢掉整行注释——探针要判断的是真正执行的命令，不是解释为什么这么写的注释。"""
+    return "\n".join(line for line in body.splitlines() if not line.strip().startswith("#"))
+
+
+def user_group_probe() -> Tuple[int, Dict[str, str]]:
+    """真跑一次 ``create_service_user``：桩掉 run/id/groupadd/useradd/usermod，记录下发的 argv。
+
+    干跑只能证明文本长什么样，证不了「用户已存在且主组不符时到底纠正不纠正」，
+    而那正是生产上踩到的那一条。返回 (退出码, {场景: 输出})。
+    """
+    if shutil.which("bash") is None:
+        return 0, {}
+    source = (REPO / "install_ubuntu22.sh").read_text(encoding="utf-8").splitlines(keepends=True)
+    while source and not source[-1].strip():
+        source.pop()
+    if not source or not source[-1].strip().startswith("main "):
+        return 1, {"__err__": f"尾部不是 main 调用：{source[-1:]!r}"}
+    probe = r"""
+set +eu
+D="$1"
+LOG="$D/calls.log"
+. "$D/inst.sh"
+run() { printf '%s\n' "$*" >> "$LOG"; }
+id() {
+  if [ "$1" = "-u" ]; then
+    if [ $# -eq 1 ]; then echo 1000; return 0; fi
+    [ "$EXISTING" = 1 ] && { echo 900; return 0; }
+    return 1
+  fi
+  if [ "$1" = "-gn" ]; then echo "$PRIMARY"; return 0; fi
+  return 1
+}
+groupadd() { echo "LEAKED-GROUPADD"; }
+useradd() { echo "LEAKED-USERADD"; }
+usermod() { echo "LEAKED-USERMOD"; }
+require_ubuntu() { return 0; }
+NO_SUDO=1
+MODE=native
+SERVICE_USER=svc-bot
+SERVICE_GROUP=studio-ops
+DATA_DIR=/var/lib/popopx-studio
+for scenario in fresh wronggroup rightgroup; do
+  : > "$LOG"
+  case "$scenario" in
+    fresh) EXISTING=0; PRIMARY="" ;;
+    wronggroup) EXISTING=1; PRIMARY="svc-bot" ;;
+    rightgroup) EXISTING=1; PRIMARY="studio-ops" ;;
+  esac
+  printf '@@@ %s\n' "$scenario"
+  create_service_user
+  printf '%s\n' '--- calls'
+  cat "$LOG"
+done
+"""
+    with tempfile.TemporaryDirectory(prefix="pbx-usergroup-") as td:
+        Path(td, "inst.sh").write_text("".join(source[:-1]), encoding="utf-8")
+        Path(td, "probe.sh").write_text(probe.lstrip(), encoding="utf-8")
+        Path(td, "calls.log").write_text("", encoding="utf-8")
+        # log/warn 走 stderr、命令记录走 stdout，分开读会打乱场景顺序，先并成一个流。
+        done = run_bash(["-c", f'bash "{td}/probe.sh" "{td}" 2>&1'], timeout=120)
+    blocks: Dict[str, str] = {}
+    for chunk in (done.stdout + done.stderr).split("@@@ ")[1:]:
+        name, _, rest = chunk.partition("\n")
+        blocks[name.strip()] = rest
+    return done.returncode, blocks
+
+
 def repo_text_files() -> List[Path]:
     """仓库里属于交付物的文本文件（跳过 .git/.venv/运行数据/字节码）。"""
     skip = {".git", ".venv", "var", "node_modules", "__pycache__", ".pytest_cache"}
@@ -3376,6 +3587,8 @@ def group_install(test: SelfTest, h: Harness) -> None:
         t.eq(f"{name} 以换行收尾", raw.endswith(b"\n"), True)
         t.check(f"{name} 篇幅足够", len(lines) > 200, str(len(lines)))
         t.eq(f"{name} bash -n 语法通过", run_bash(["-n", name]).returncode, 0)
+        glued = re.findall(r"\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]", code_only(text))
+        t.check(f"{name} 变量名不粘连中文", not glued, str(glued[:3]))
         t.contains(f"{name} 声明回环地址", text, "127.0.0.1")
         t.contains(f"{name} 引用 CLI 安装路径", text, "/usr/local/bin/popopx-cli")
         t.contains(f"{name} 提到 Bot 端口区间", text, "5230")
@@ -3438,6 +3651,48 @@ def group_install(test: SelfTest, h: Harness) -> None:
     t.contains("Ubuntu 干跑声明数据目录", du, "Environment=STUDIO_DATA_DIR=/var/lib/popopx-studio")
     t.contains("Ubuntu 干跑含控制端口区间", du, "BOT_WS_PORT_BASE=5230")
     t.contains("Ubuntu 干跑含控制端口上限", du, "BOT_WS_PORT_MAX=5299")
+
+    # ---------------------------------------------------- 服务用户主组与 --group 一致性
+    # GNU useradd 的 -U/--user-group 会另建一个与用户名同名的组做主组，--group 于是被绕开：
+    # 单元 Group= 与 chown 都指向该用户不属于的组，而 systemd 只要组存在就不报错——错配全静默。
+    csu = code_only(shell_function_body(ubuntu, "create_service_user"))
+    t.contains("建用户源码含 create_service_user", csu, "create_service_user()")
+    t.contains("建用户显式指定主组", csu, '--gid "$SERVICE_GROUP"')
+    t.check("绝不使用 --user-group", "--user-group" not in csu, csu[:200])
+    t.contains("预建组容忍组已存在", csu, "groupadd --system --force")
+    t.contains("主组不符时纠正", csu, "usermod -g")
+    t.contains("用 id -gn 读实际主组", csu, "id -gn")
+
+    grp_dry = run_bash(["install_ubuntu22.sh", "--dry-run", "--user", "svc-bot", "--group", "studio-ops"])
+    gd = grp_dry.stdout + grp_dry.stderr
+    t.eq("自定义组干跑退出码 0", grp_dry.returncode, 0)
+    t.contains("自定义组干跑打印预建组", gd, "groupadd --system --force studio-ops")
+    t.contains("自定义组干跑打印 --gid", gd, "--gid studio-ops")
+    t.check("自定义组干跑不打印 -U", " -U " not in gd, gd[-200:])
+
+    probe_code, probe_cases = user_group_probe()
+    t.eq("属组探针退出码 0", probe_code, 0)
+    t.check("探针命令全部经 run()", "LEAKED-" not in "".join(probe_cases.values()),
+            "有命令绕过 run() 直接执行了")
+    fresh = probe_cases.get("fresh", "")
+    t.check("探针：空库场景建了用户", "useradd" in fresh, "未建用户")
+    t.contains("探针：新建前预建组", fresh, "groupadd --system --force studio-ops")
+    t.contains("探针：新建用户带 --gid", fresh, "--gid studio-ops svc-bot")
+    t.contains("探针：新建用户仍是 nologin", fresh, "--shell /usr/sbin/nologin")
+    t.check("探针：不下发 -U 短旗标", " -U " not in fresh, fresh)
+    wrong = probe_cases.get("wronggroup", "")
+    t.contains("探针：主组不符时 usermod -g", wrong, "usermod -g studio-ops svc-bot")
+    t.check("探针：纠正主组不重建用户", "useradd" not in wrong, wrong)
+    t.contains("探针：纠正前显式告警", wrong, "与 --group studio-ops 不符")
+    same = probe_cases.get("rightgroup", "")
+    t.contains("探针：主组一致时说明幂等跳过", same, "已存在，主组即 studio-ops")
+    t.check("探针：主组一致时零改动", same.split("--- calls")[-1].strip() == "", same)
+
+    chk = code_only(shell_function_body(ubuntu, "check_mode"))
+    t.contains("--check 校验服务用户主组", chk, "id -gn")
+    t.contains("--check 校验数据目录属组", chk, "stat -c '%G'")
+    t.contains("--check 用组数据库查组存在", chk, "getent group")
+    t.check("--check 不用 id -g 判组存在（喂组名必假阴性）", 'id -g "$SERVICE_GROUP"' not in chk, chk[:200])
     t.contains("Ubuntu 干跑承诺不下载二进制", du, "未下载二进制")
     t.contains("Ubuntu 干跑承诺不建用户", du, "未建用户")
     t.contains("Ubuntu 干跑承诺不写单元", du, "未写 /etc/systemd/system/popopx-bot-studio.service")

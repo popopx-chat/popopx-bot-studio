@@ -83,6 +83,12 @@ verb() { [ "$VERBOSE" -eq 1 ] && printf '[%s]     %s\n' "$(ts)" "$*"; return 0; 
 die() { local code="${2:-1}"; printf '[%s] error: %s\n' "$(ts)" "$1" >&2; exit "$code"; }
 problem() { printf '[%s] FAIL: %s\n' "$(ts)" "$*" >&2; PROBLEMS=$((PROBLEMS + 1)); }
 note() { printf '[%s]  tip: %s\n' "$(ts)" "$*"; NOTES=$((NOTES + 1)); }
+# 把 argv 还原成可读的一行（干跑打印用）。用 %q 而不是 ${arr[*]@Q}：后者要 bash 4.4+。
+quote_args() {
+  local out="" arg
+  for arg in "$@"; do out+="${out:+ }$(printf '%q' "$arg")"; done
+  printf '%s' "$out"
+}
 
 run() {
   printf '  + %s\n' "$*"
@@ -129,7 +135,9 @@ POPOPX Bot Studio 的 Ubuntu 22.04 生产安装器（systemd 服务，只绑 127
       --app-dir PATH        部署目录（默认 /opt/popopx-bot-studio）
       --data-dir PATH       STUDIO_DATA_DIR（默认 /var/lib/popopx-studio）
       --user NAME           服务用户（默认 popopx-studio，绝不使用 root）
-      --group NAME          服务组（默认同 --user）
+      --group NAME          服务组（默认同 --user）：以 useradd --gid 建为服务用户的**主组**，
+                            systemd 的 Group= 与数据目录属组都取它；用户已存在但主组不符时
+                            自动 usermod -g 收敛（--check 会校验）
       --port N              Studio 端口（默认 8090）
       --cli-bin PATH        popopx-cli 路径（默认 /usr/local/bin/popopx-cli）
       --unit NAME           systemd 单元名（默认 popopx-bot-studio）
@@ -323,19 +331,31 @@ deploy_app_dir() {
 
 create_service_user() {
   [ "$MODE" = "native" ] || return 0
+  # 主组必须显式取 --group。GNU useradd 的 -U/--user-group 会另建一个与用户名同名的组做主组，
+  # SERVICE_GROUP 于是被绕开：单元 Group= 与 chown 都指向一个该用户不属于的组，
+  # 而 systemd 只要组存在就不报错，属组错配完全是静默的。
+  local -a mkgroup=(groupadd --system --force "$SERVICE_GROUP")
+  local -a mkuser=(useradd --system --create-home --home-dir "$DATA_DIR"
+                   --shell /usr/sbin/nologin --gid "$SERVICE_GROUP" "$SERVICE_USER")
   if ! require_ubuntu; then
-    printf '  + [would] getent group %s || groupadd --system %s\n' "$SERVICE_GROUP" "$SERVICE_GROUP"
-    printf '  + [would] id -u %s 2>/dev/null || useradd --system --create-home --home-dir %s --shell /usr/sbin/nologin --group %s %s\n' \
-      "$SERVICE_USER" "$DATA_DIR" "$SERVICE_GROUP" "$SERVICE_USER"
+    printf '  + [would] %s\n' "$(quote_args "${mkgroup[@]}")"
+    printf '  + [would] id -u %s 2>/dev/null || %s\n' "$SERVICE_USER" "$(quote_args "${mkuser[@]}")"
     return 0
   fi
   if id -u "$SERVICE_USER" >/dev/null 2>&1; then
-    log "系统用户 $SERVICE_USER 已存在（幂等，跳过创建）"
+    local current_group=""
+    current_group=$(id -gn "$SERVICE_USER" 2>/dev/null || echo "")
+    if [ "$current_group" = "$SERVICE_GROUP" ]; then
+      log "系统用户 $SERVICE_USER 已存在，主组即 ${SERVICE_GROUP}（幂等，跳过）"
+    else
+      warn "服务用户 ${SERVICE_USER} 的主组是 ${current_group:-未知}，与 --group ${SERVICE_GROUP} 不符 —— 纠正为主组"
+      as_root "${mkgroup[@]}"
+      as_root usermod -g "$SERVICE_GROUP" "$SERVICE_USER"
+    fi
   else
-    log "创建专用系统用户 ${SERVICE_USER}（nologin，绝不以 root 运行服务）"
-    as_root_ok groupadd --system "$SERVICE_GROUP" || true
-    as_root useradd --system --create-home --home-dir "$DATA_DIR" \
-      --shell /usr/sbin/nologin --user-group "$SERVICE_USER"
+    log "创建专用系统用户 ${SERVICE_USER}（nologin，主组 ${SERVICE_GROUP}，绝不以 root 运行服务）"
+    as_root "${mkgroup[@]}"
+    as_root "${mkuser[@]}"
   fi
 }
 
@@ -833,8 +853,34 @@ check_mode() {
   fi
   if [ -x "$CLI_BIN" ]; then log "$CLI_BIN ✔"; else note "缺少 ${CLI_BIN}：Studio 将以离线降级模式运行"; fi
   if [ "$MODE" = "native" ]; then
-    if id -u "$SERVICE_USER" >/dev/null 2>&1; then log "服务用户 $SERVICE_USER ✔" || true; else note "服务用户 $SERVICE_USER 不存在"; fi
+    if id -u "$SERVICE_USER" >/dev/null 2>&1; then
+      log "服务用户 $SERVICE_USER ✔"
+      local user_group=""
+      user_group=$(id -gn "$SERVICE_USER" 2>/dev/null || echo '?')
+      if [ "$user_group" = "$SERVICE_GROUP" ]; then
+        log "服务用户主组 $user_group ✔（与 --group 一致）"
+      else
+        problem "服务用户主组是 ${user_group}，与 --group $SERVICE_GROUP 不符：unit 的 Group= 与属组会静默失配 → sudo usermod -g '$SERVICE_GROUP' $SERVICE_USER"
+      fi
+    else
+      note "服务用户 $SERVICE_USER 不存在"
+    fi
+    # 组存在性不能用 id -g：GNU id 的 -g 取「某个用户的主组 gid」，喂组名会直接失败，
+    # 于是组明明存在也会被报成不存在。查组只能查组数据库。
+    if ! getent group "$SERVICE_GROUP" >/dev/null 2>&1 \
+       && ! awk -F: -v g="$SERVICE_GROUP" '$1 == g { found = 1 } END { exit !found }' /etc/group 2>/dev/null; then
+      note "组 $SERVICE_GROUP 不存在（native 安装会用 groupadd --system --force 创建）"
+    fi
     [ "$(id -u "$SERVICE_USER" 2>/dev/null || echo x)" = "0" ] && problem "服务用户是 uid 0（必须以非 root 运行）"
+    if [ -d "$DATA_DIR" ]; then
+      local data_group=""
+      data_group=$(stat -c '%G' "$DATA_DIR" 2>/dev/null || stat -f '%Sg' "$DATA_DIR" 2>/dev/null || echo '?')
+      if [ "$data_group" = "$SERVICE_GROUP" ]; then
+        log "$DATA_DIR 属组 $data_group ✔"
+      else
+        problem "$DATA_DIR 属组是 ${data_group}，与 --group $SERVICE_GROUP 不符 → sudo chown -R $SERVICE_USER:$SERVICE_GROUP '$DATA_DIR'"
+      fi
+    fi
     if [ -f "$UNIT_PATH" ]; then
       log "已安装 $UNIT_PATH"
       if grep -q -- '--host 127.0.0.1' "$UNIT_PATH"; then
