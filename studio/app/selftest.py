@@ -258,6 +258,7 @@ from .security.opaque_invite_codec import (
     NONCE_BYTES as INVITE_NONCE_BYTES,
     OpaqueInviteError,
     TAG_BYTES as INVITE_TAG_BYTES,
+    URI_SCHEMES as INVITE_URI_SCHEMES,
     b64url_decode,
     b64url_encode,
     decode_invite_link,
@@ -5310,6 +5311,8 @@ def group_invite_codec(test: SelfTest, h: Harness) -> None:
     t.eq("nonce 12 字节", INVITE_NONCE_BYTES, 12)
     t.eq("tag 16 字节", INVITE_TAG_BYTES, 16)
     t.eq("token 上限 5500 字符", INVITE_MAX_TOKEN_CHARS, 5500)
+    t.eq("URI 协议白名单与 service-suite 一致", INVITE_URI_SCHEMES,
+         ("popopx:/", "popopx://", "https://"))
 
     kdf = doc["key_derivation"]
     t.eq("向量 IKM 与实现一致", kdf["ikm_hex"], INVITE_MASTER_KEY.hex())
@@ -5375,6 +5378,19 @@ def group_invite_codec(test: SelfTest, h: Harness) -> None:
         t.eq(f"上游向量 {name} 解码回原文", decode_invite_link(vector["link"]), vector["plaintext_utf8"])
         t.eq(f"上游向量 {name} 不含明文节点域名", "popopx.im" in vector["link"], False)
 
+    rejected = doc["rejected_vectors"]
+    t.eq("拒绝向量覆盖旧 smp 形态", [v["name"] for v in rejected], ["smp-legacy"])
+    for vector in rejected:
+        name = vector["name"]
+        raw = b64url_decode(vector["token"])
+        t.eq(f"拒绝向量 {name} 明文确为旧地址",
+             ChaCha20Poly1305(INVITE_KEY).decrypt(
+                 bytes.fromhex(vector["nonce_hex"]), raw[INVITE_NONCE_BYTES:], INVITE_AAD),
+             vector["address"].encode("utf-8"))
+        t.raises(f"拒绝向量 {name} 链接解码被拒", OpaqueInviteError, decode_invite_link, vector["link"])
+        t.raises(f"拒绝向量 {name} 地址编码被拒", OpaqueInviteError, encode_invite_link, vector["address"])
+        t.eq(f"拒绝向量 {name} 原因是协议白名单", vector["reason"], "uri_scheme")
+
     sample = doc["vectors"][0]
     fixed = encode_invite_link(sample["address"], nonce=bytes.fromhex(sample["nonce_hex"]))
     t.eq("固定 nonce 密文不含 smp 子串", "smp" in fixed.lower(), False)
@@ -5402,24 +5418,36 @@ def group_invite_codec(test: SelfTest, h: Harness) -> None:
              "https://popopx.im." + token)
     t.raises("旧点号前缀被拒", OpaqueInviteError, decode_invite_link,
              "https://popopx.chat." + token)
-    t.raises("原始 smp:// 不是封装链接", OpaqueInviteError, decode_invite_link, sample["address"])
+    t.raises("原始 smp:// 不是封装链接", OpaqueInviteError, decode_invite_link,
+             "smp://f2X5hAgHZW9-SVkhMou0sUFg3AHUi2pE3kSw46AiGjY=@smp1.popopx.im/x")
     t.raises("非字符串链接被拒", OpaqueInviteError, decode_invite_link, 12345)
     t.raises("超长 token 被拒", OpaqueInviteError, decode_invite_link, INVITE_LINK_PREFIX + "A" * (INVITE_MAX_TOKEN_CHARS + 1))
 
-    t.raises("11 字节 nonce 被拒", OpaqueInviteError, encode_invite_link, "smp://x", nonce=b"\x00" * 11)
-    t.raises("13 字节 nonce 被拒", OpaqueInviteError, encode_invite_link, "smp://x", nonce=b"\x00" * 13)
-    t.raises("字符串 nonce 被拒", OpaqueInviteError, encode_invite_link, "smp://x", nonce="0" * 12)
+    for uri in ("popopx:/fakepermanentlink",
+                "popopx://channel/smp8.popopx.im/green-room#key=AAECAw",
+                "https://smp1.popopx.im/a#contact-key-7f3c9d2e"):
+        t.eq(f"允许协议 {uri.split('#')[0]} 往返",
+             decode_invite_link(encode_invite_link(uri)), uri)
+    for uri in ("smp://f2X5hAgHZW9-SVkhMou0sUFg3AHUi2pE3kSw46AiGjY=@smp1.popopx.im/x",
+                "javascript:alert(1)", "file:///etc/passwd",
+                "HTTP://popopx.chat/i/v1/x", "https:/smp1.popopx.im/a",
+                "//smp1.popopx.im/a", "popopx:link", "ftp://smp1.popopx.im/a"):
+        t.raises(f"非白名单协议被拒 {uri.split(':')[0]}", OpaqueInviteError, encode_invite_link, uri)
+
+    t.raises("11 字节 nonce 被拒", OpaqueInviteError, encode_invite_link, "https://x", nonce=b"\x00" * 11)
+    t.raises("13 字节 nonce 被拒", OpaqueInviteError, encode_invite_link, "https://x", nonce=b"\x00" * 13)
+    t.raises("字符串 nonce 被拒", OpaqueInviteError, encode_invite_link, "https://x", nonce="0" * 12)
     t.raises("空地址被拒", OpaqueInviteError, encode_invite_link, "")
     t.raises("纯空白地址被拒", OpaqueInviteError, encode_invite_link, "   ")
-    t.raises("含换行地址被拒", OpaqueInviteError, encode_invite_link, "smp://a\nb")
-    t.raises("含 NUL 地址被拒", OpaqueInviteError, encode_invite_link, "smp://a\x00b")
-    t.raises("超长地址被拒", OpaqueInviteError, encode_invite_link, "a" * (INVITE_MAX_ADDRESS_BYTES + 1))
-    t.eq("恰好上限的地址可封装", decode_invite_link(encode_invite_link("a" * INVITE_MAX_ADDRESS_BYTES)),
-         "a" * INVITE_MAX_ADDRESS_BYTES)
+    t.raises("含换行地址被拒", OpaqueInviteError, encode_invite_link, "https://a\nb")
+    t.raises("含 NUL 地址被拒", OpaqueInviteError, encode_invite_link, "https://a\x00b")
+    exact = "https://" + "a" * (INVITE_MAX_ADDRESS_BYTES - len("https://"))
+    t.raises("超长地址被拒", OpaqueInviteError, encode_invite_link, exact + "a")
+    t.eq("恰好上限的地址可封装", decode_invite_link(encode_invite_link(exact)), exact)
     t.eq("字节级 bytearray nonce 可用", decode_invite_link(
-        encode_invite_link("smp://x", nonce=bytearray(range(12)))), "smp://x")
-    t.eq("地址两端空白被清理", decode_invite_link(encode_invite_link("  smp://x  ")), "smp://x")
-    t.eq("UTF-8 地址往返", decode_invite_link(encode_invite_link("smp://客服@节点/队列")), "smp://客服@节点/队列")
+        encode_invite_link("https://x", nonce=bytearray(range(12)))), "https://x")
+    t.eq("地址两端空白被清理", decode_invite_link(encode_invite_link("  https://x  ")), "https://x")
+    t.eq("UTF-8 地址往返", decode_invite_link(encode_invite_link("https://客服@节点/队列")), "https://客服@节点/队列")
 
     t.eq("b64url 无填充编码", b64url_encode(b"\xfb\xff"), "-_8")
     t.eq("b64url 往返", b64url_decode(b64url_encode(b"\x00\x01\x02")), b"\x00\x01\x02")
@@ -5428,8 +5456,8 @@ def group_invite_codec(test: SelfTest, h: Harness) -> None:
 
     t.eq("封装链接可被前缀识别", looks_like_opaque_invite(sample["link"]), True)
     t.eq("原始地址不被误判", looks_like_opaque_invite(sample["address"]), False)
-    t.eq("JSON 向量覆盖三种地址形态", sorted(v["name"] for v in doc["vectors"]),
-         ["https-short", "popopx-scheme", "smp-long"])
+    t.eq("JSON 向量覆盖三种允许地址形态", sorted(v["name"] for v in doc["vectors"]),
+         ["https-long", "https-short", "popopx-scheme"])
 
 
 def _external_group(module: str, key: str) -> Callable[[SelfTest, Harness], None]:

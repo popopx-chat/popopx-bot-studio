@@ -14,6 +14,8 @@ Wire format::
 * AEAD  = ChaCha20-Poly1305，16 字节 tag 由 ``cryptography`` 追加在密文后
 * AAD   = ``popopx.chat/invite-link/v1/aad``
 * token = 无填充 Base64URL（字母表 ``A-Z a-z 0-9 - _``）
+* plaintext scheme 仅限 ``popopx:/`` / ``popopx://`` / ``https://``，与服务端
+  ``URI_SCHEMES`` 一致；``smp://`` 只作为高级诊断的原始地址展示，不能被封装。
 
 密钥参数与 ``popopx-service-suite`` 的 ``opaque_invite_codec.py``（commit
 ``a6c1632``）逐字节一致，全生态只维护一套解密密钥；``opaque_invite_vectors.json``
@@ -43,6 +45,7 @@ NONCE_BYTES = 12
 TAG_BYTES = 16
 KEY_BYTES = 32
 AAD = b"popopx.chat/invite-link/v1/aad"
+URI_SCHEMES = ("popopx:/", "popopx://", "https://")
 
 # 固定主密钥：换掉它会让所有已发出的隐私链接失效，客户端也必须同步换。
 # 与 popopx-service-suite/gateway/app/opaque_invite_codec.py @ a6c1632 一致。
@@ -92,6 +95,11 @@ def b64url_decode(token: str) -> bytes:
         raise OpaqueInviteError(f"邀请链接编码无法解码：{type(exc).__name__}") from exc
 
 
+def _require_scheme(text: str) -> None:
+    if not text.startswith(URI_SCHEMES):
+        raise OpaqueInviteError("联系地址必须以 popopx:/、popopx:// 或 https:// 开头")
+
+
 def _clean_address(address: str) -> str:
     if not isinstance(address, str):
         raise OpaqueInviteError(f"联系地址必须是字符串，收到 {type(address).__name__}")
@@ -100,13 +108,15 @@ def _clean_address(address: str) -> str:
         raise OpaqueInviteError("联系地址不能为空")
     if any(ch in text for ch in "\x00\r\n"):
         raise OpaqueInviteError("联系地址不能包含 NUL 或换行")
+    _require_scheme(text)
     if len(text.encode("utf-8")) > MAX_ADDRESS_BYTES:
         raise OpaqueInviteError(f"联系地址超过 {MAX_ADDRESS_BYTES} 字节上限")
     return text
 
 
 def encode_invite_link(address: str, *, nonce: Optional[bytes] = None) -> str:
-    """把原始 ``smp://`` 联系地址封装为 ``https://popopx.chat/i/v1/<Base64URL>``。
+    """把 ``popopx:/`` / ``popopx://`` / ``https://`` 联系地址封装为
+    ``https://popopx.chat/i/v1/<Base64URL>``。
 
     ``nonce`` 只用于跨语言测试向量的确定性复现；生产调用一律省略，由
     :func:`secrets.token_bytes` 生成 12 字节随机 nonce。
@@ -142,9 +152,11 @@ def decode_invite_link(link: str) -> str:
     except InvalidTag as exc:
         raise OpaqueInviteError("邀请链接密文校验失败：疑似被截断或篡改") from exc
     try:
-        return plain.decode("utf-8")
+        plain = plain.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise OpaqueInviteError("邀请链接明文不是合法 UTF-8") from exc
+    _require_scheme(plain)
+    return plain
 
 
 def looks_like_opaque_invite(text: str) -> bool:
@@ -159,6 +171,7 @@ __all__ = [
     "TAG_BYTES",
     "KEY_BYTES",
     "AAD",
+    "URI_SCHEMES",
     "MASTER_KEY",
     "HKDF_SALT",
     "HKDF_INFO",

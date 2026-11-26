@@ -34,11 +34,11 @@
   },
   "vectors": [
     {
-      "name": "smp-long",
-      "address": "smp://f2X5hAgHZW9-SVkhMou0sUFg3AHUi2pE3kSw46AiGjY=@smp1.popopx.im/quheabd5hdghpztkw53fho6fki722npoytgvkutnbh3gtpgrlna5ukad#/?v=1-2",
-      "nonce_hex": "000102030405060708090a0b",
-      "token": "AAECAwQFBgcICQoLYAnjU2Jd7URVmBjs5C65KLMdBItcvpu_RwJdcR65zuVQs-0deHdbc1LDqB7AvOaD-98T5v4Sa5PsXYnz8Tinpt90QmHUQtOrIZM5adz0dtuLD09QZOdc2LYAd2crZE_N86w37n-bkB_BTh4LO57b_0RqzfwORNwsGCPZMKHui_j79W5EQ8gq7p9fZqAyAZQzRD8",
-      "link": "https://popopx.chat/i/v1/AAECAwQFBgcICQoLYAnjU2Jd7URVmBjs5C65KLMdBItcvpu_RwJdcR65zuVQs-0deHdbc1LDqB7AvOaD-98T5v4Sa5PsXYnz8Tinpt90QmHUQtOrIZM5adz0dtuLD09QZOdc2LYAd2crZE_N86w37n-bkB_BTh4LO57b_0RqzfwORNwsGCPZMKHui_j79W5EQ8gq7p9fZqAyAZQzRD8"
+      "name": "https-long",
+      "address": "https://smp1.popopx.im/a#f2X5hAgHZW9-SVkhMou0sUFg3AHUi2pE3kSw46AiGjY=&queue=quheabd5hdghpztkw53fho6fki722npoytgvkutnbh3gtpgrlna5ukad&v=1-2",
+      "nonce_hex": "101112131415161718191a1b",
+      "token": "EBESExQVFhcYGRobhrBsbuMIiiS_pVNVwLohwgkBls6GXA6WAfScpBOAE5QhemFFJ4Qceuw-cOadROx5zSVPbuBD7_17hvy5cCOHZ2ZApH5mn5iXxPGVZjdDMNZWNbo9QagSQCQNx_3c7ndhG8loVz4dCypqwo21ch3s9yuvdmfUJdgCvLomMYxQwCud-CXu92jCALi8loNWGpQwa_inj9viLhKkuw",
+      "link": "https://popopx.chat/i/v1/EBESExQVFhcYGRobhrBsbuMIiiS_pVNVwLohwgkBls6GXA6WAfScpBOAE5QhemFFJ4Qceuw-cOadROx5zSVPbuBD7_17hvy5cCOHZ2ZApH5mn5iXxPGVZjdDMNZWNbo9QagSQCQNx_3c7ndhG8loVz4dCypqwo21ch3s9yuvdmfUJdgCvLomMYxQwCud-CXu92jCALi8loNWGpQwa_inj9viLhKkuw"
     },
     {
       "name": "https-short",
@@ -53,6 +53,16 @@
       "nonce_hex": "000000000000000000000001",
       "token": "AAAAAAAAAAAAAAAB7D5F3gW1f7A-ZH0EwshZlW_t_kYAMvMCElRrpp3VxiT43_gR-moiACo",
       "link": "https://popopx.chat/i/v1/AAAAAAAAAAAAAAAB7D5F3gW1f7A-ZH0EwshZlW_t_kYAMvMCElRrpp3VxiT43_gR-moiACo"
+    }
+  ],
+  "rejected_vectors": [
+    {
+      "name": "smp-legacy",
+      "address": "smp://f2X5hAgHZW9-SVkhMou0sUFg3AHUi2pE3kSw46AiGjY=@smp1.popopx.im/quheabd5hdghpztkw53fho6fki722npoytgvkutnbh3gtpgrlna5ukad#/?v=1-2",
+      "reason": "uri_scheme",
+      "nonce_hex": "000102030405060708090a0b",
+      "token": "AAECAwQFBgcICQoLYAnjU2Jd7URVmBjs5C65KLMdBItcvpu_RwJdcR65zuVQs-0deHdbc1LDqB7AvOaD-98T5v4Sa5PsXYnz8Tinpt90QmHUQtOrIZM5adz0dtuLD09QZOdc2LYAd2crZE_N86w37n-bkB_BTh4LO57b_0RqzfwORNwsGCPZMKHui_j79W5EQ8gq7p9fZqAyAZQzRD8",
+      "link": "https://popopx.chat/i/v1/AAECAwQFBgcICQoLYAnjU2Jd7URVmBjs5C65KLMdBItcvpu_RwJdcR65zuVQs-0deHdbc1LDqB7AvOaD-98T5v4Sa5PsXYnz8Tinpt90QmHUQtOrIZM5adz0dtuLD09QZOdc2LYAd2crZE_N86w37n-bkB_BTh4LO57b_0RqzfwORNwsGCPZMKHui_j79W5EQ8gq7p9fZqAyAZQzRD8"
     }
   ],
   "upstream": {
