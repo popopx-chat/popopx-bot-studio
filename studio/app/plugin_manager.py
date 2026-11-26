@@ -74,6 +74,7 @@ class StudioServices(Protocol):
         content: Dict[str, Any],
         *,
         plugin_id: str = "",
+        file_path: str = "",
     ) -> Dict[str, Any]:
         ...
 

@@ -5,13 +5,23 @@ and plugin gateway for the POPOPX network. One process supervises any number of
 `popopx-cli` Bot instances over loopback WebSockets, with a web console (18 locales)
 and an offline cold-backup tool.
 
-- Licence: AGPL-3.0-only (see `LICENSE`)
+As of this version every Bot can also run a **24/7 stand-in**: a small on-device model extracts
+intent, a large model only writes the wording, and the calendar is never touched until the owner
+taps confirm. Two stand-ins negotiate over end-to-end-encrypted SMP **exchanging masked candidate
+slots only**, while external visitors book through a one-time web link that needs no install, no
+account and no e-mail address.
+
+- Licence: code is AGPL-3.0-only (see `LICENSE`); the bundled Needle 3 weights are a third-party
+  Apache-2.0 asset — text and attribution live in `studio/assets/models/` (section 11).
 - Zero binary bundling: this repository never contains or ships a compiled `popopx-chat`
   binary. At runtime it only drives external `popopx-cli` processes over
   `ws://127.0.0.1:<port>`; the installer can fetch the binary on demand into
   `/usr/local/bin/popopx-cli`, and `--no-node-download` skips that entirely.
-- Self-test gate: `python3 -m app.main --self-test` → **15 groups / 1884 real assertions /
-  0 failures / ~18 s / exit code 0**. It only needs `studio/tests/fake_popopx_cli.py`
+- Zero model downloads: `needle3.cact` (33.7 MiB, under 50 MB) ships inside the repository, is
+  SHA-256 verified before loading, and is usable the moment the service starts. Without a C
+  runtime or SDK the runtime falls back to the deterministic extractor in this repo (section 5).
+- Self-test gate: `python3 -m app.main --self-test` → **23 groups / 7155 real assertions /
+  0 failures / ~16 s / exit code 0**. It only needs `studio/tests/fake_popopx_cli.py`
   (a local stand-in that speaks the same wire protocol and keeps profiles in `bot_chat.db`,
   so it survives a restart like the real CLI) — no network, no SMP server.
 
@@ -28,7 +38,7 @@ browser console / developer clients
 │ POPOPX Bot Studio (Python 3.11 + FastAPI, single process)          │
 │  main.py           routing, auth, lifecycle                                      │
 │  config.py         .env / environment, permission checks (0700·0600)             │
-│  database.py       SQLite (WAL) ledger + schema_migrations (currently v4)        │
+│  database.py       SQLite (WAL) ledger + schema_migrations (currently v5)        │
 │  bot_supervisor.py per-Bot isolated data dir, loopback port, wrapper, backoff    │
 │  ws_protocol.py    line-protocol frames, /_address /_create /_send commands      │
 │  gateway.py        inbound event → rules/router/plugins → outbound send          │
@@ -37,20 +47,45 @@ browser console / developer clients
 │  plugin_manager.py plugin bus: discovery, lifecycle, isolated dispatch, masking  │
 │  open_api.py       Telegram-style developer API                                   │
 │  i18n.py           18 locales, negotiation, welcome templates, parity asserts     │
-└───────┬────────────────────────────────────────────────────────────┘
+│  ── stand-in robot ──────────────────────────────────────────────────────────    │
+│  agent_runtime.py      orchestration: intent → preference filter → proposal →    │
+│                        card → approval → receipt, every step audited             │
+│  needle3_runtime.py    on-device small engine (extracts the 5 tool calls only)   │
+│                        plus the deterministic fallback extractor                 │
+│  needle_assets.py      bundled weight discovery and the SHA-256 gate             │
+│  agent_preferences.py  per-Bot rules: working hours, buffers, blocked periods,   │
+│                        keywords, negotiation policy                              │
+│  agent_copy.py         12 copy kinds × 18 locales, placeholder/script gates      │
+│  reasoner_bridge.py    the large model writes wording only (loopback/https only) │
+│  mac_node_bridge.py    local Mac Node bridge: status, availability, approve      │
+│  eco_cards.py          ::POPOPX_ECO:: card and ::CB:: receipt codec              │
+│  a2a.py                channel A: masked-slot negotiation frames                 │
+│  guest_portal.py       channel B: HMAC one-time link, masked slots, .ics         │
+│  ics.py                RFC 5545 event generation (escaping, UTC instants)         │
+│  agent_admin.py        /api/agent admin routes plus the /book/<token> portal     │
+└───────┬───────────────────────┬─────────────────────────────────────┘
         │  ws://127.0.0.1:5230..5299 (never 0.0.0.0)
    popopx-cli ×N   one process per Bot, data in <data_dir>/bots/<bot_id>/cli-data
         │
    smp1..8.popopx.im (built-in dual-stack cluster, overridable via BOT_SMP_SERVERS)
+        ▲ channel A: ::POPOPX_A2A:: frames, signed with the peer session key, masked slots only
+        │
+   http://127.0.0.1:18920  Mac Node: X-PPX-Token, loopback only, non-loopback refused outright
+   http(s)://<studio>/book/<one_time_token>  channel B: no session, no cookie, no external assets
 ```
 
-Isolation contract (guarded by the `supervisor`, `config` and `install` groups):
+Isolation contract (guarded by the `supervisor`, `config`, `install`, `mac_node`,
+`guest_portal` and `a2a` groups):
 
 | Aspect | Value |
 | --- | --- |
 | Console bind | `127.0.0.1:8090` by default; a non-loopback bind requires `STUDIO_ALLOW_LAN=1` or an explicit `--lan` |
 | Bot control ports | from `BOT_WS_PORT_BASE` (default 5230, ceiling 5299), loopback only |
 | Bot data directory | `<STUDIO_DATA_DIR>/bots/<bot_id>/cli-data`, dirs `0700`, files `0600` |
+| Stand-in preference dir | `<STUDIO_DATA_DIR>/bots/<bot_id>/agent/preferences.json`, same `0700`/`0600`, one file per Bot and never shared |
+| Mac Node bridge | only `http://127.0.0.1:18920` or `http://localhost:18920`; any other host is rejected inside `load_settings()` (anti-SSRF), requests carry `X-PPX-Token` |
+| Reasoner endpoint | plaintext `http` is loopback-only, anything remote must be `https`, and userinfo in the URL is refused; the key is read from `.env` and echoed back masked |
+| Guest link | `<base>/book/<token>`; the token is a self-verifying HMAC signature (`{v,lid,iat,exp,mus,dur}`), the server creates no session and sets no cookie |
 | Launch wrapper | `run-cli.sh` (`#!/bin/sh` with per-token `shlex.quote`, so quote-stripping supervisors cannot split it), keeps `0755`; carries `--user-display-name <profile>` only while cli-data is still empty, so a headless start never blocks on the interactive prompt |
 | Bot profile | provisioning and restarts reuse the stored profile via `/user` → `/users` → `/_user <id>`; `/_create user` is never sent twice |
 | SMP cluster | inherits the binary's built-in `smp1..8.popopx.im`, override with `BOT_SMP_SERVERS` |
@@ -63,12 +98,14 @@ install_ubuntu22.sh        Ubuntu 22.04 installer (native = service user + /opt 
 install_macos.sh           macOS installer (LaunchDaemon im.popopx.botstudio)
 start_macos.sh             everyday macOS launcher (venv, random token, --check/--self-test)
 docker-compose.yml         orchestration (loopback publish only, cap_drop + no-new-privileges)
-.env.example               configuration template, 11 keys
+.env.example               configuration template, 26 keys (stand-in, Mac Node, guest portal, reasoner)
 official_tools/
   export_bot_bundle.py     offline cold backup: export / list / verify / restore (plain and AES-256-GCM)
+  verify_needle_assets.py  SHA-256 manifest checker for the bundled Needle 3 weights
 studio/
   app/                     engine sources (see the diagram above)
-  plugins/                 the four built-in plugins
+  assets/models/           bundled model assets: needle3.cact, manifest, config, licence text, notes
+  plugins/                 the five built-in plugins
   static/index.html        web console (zero-build single page, 18 locales)
   site/index.html          product site and tutorial
   tests/fake_popopx_cli.py protocol stand-in used by the self-test
@@ -129,6 +166,12 @@ was not passed, the installer detects OS and CPU architecture, pulls the latest 
 from the `popopx-chat/popopx-chat` GitHub Releases, verifies its SHA-256 and installs it
 as `/usr/local/bin/popopx-cli` with mode 755.
 
+Model weights are never part of that download: both installers run
+`official_tools/verify_needle_assets.py` against the bundled `studio/assets/models/needle3.*`
+(manifest, byte counts, per-file SHA-256, licence text present). `--check` only reports the
+problem, while a real install aborts when the check fails — a hand-edited manifest or a truncated
+weight file is worse than having no on-device model at all.
+
 ### Docker
 
 ```bash
@@ -144,13 +187,28 @@ mounts the sources read-only and keeps state in the named volume `studio-data`.
 
 Console at `http://127.0.0.1:8090/`: Bot factory (create/start/stop/cold backup),
 auto-reply rules, message routing, plugin configuration, message log and the Open API
-reference. The admin token comes from `STUDIO_ADMIN_TOKEN`; browsers use the
+reference, plus two new panels — **Stand-in robot** (extraction engine and on-device weight
+state, a try-a-sentence box, the five tool slots, the per-Bot preference rule editor, peer
+pairing, pending proposals, negotiation start, and the full-lifecycle audit trail) and
+**Guest links** (issue and list one-time links, revoke, fetch the full link on demand,
+visit/claim counters). The admin token comes from `STUDIO_ADMIN_TOKEN`; browsers use the
 `studio_token` cookie or the `X-Studio-Token` header.
 
 Admin API, prefix `/api/admin`: `session` `overview` `bots` `bots/{id}` (plus
 `qrcode` `qr.png` `send` `contacts` `groups` `rules` `routing` `start` `stop` `restart`)
 `rules/{id}` `rules/preview` `routing/{id}` `routing/preview` `plugins` `plugins/{id}`
 `logs` `updates` `backup/export` `backup/import` `backups` `config` `i18n/parity`.
+
+Stand-in admin API, prefix `/api/agent` (same `require_admin` guard): `summary`,
+`engine` (GET state / POST switch), `extract` (try a sentence), `prefs/{bot_id}` (GET/POST)
+and `prefs/{bot_id}/reset`, `peers` (GET/POST) and `peers/remove`, `proposals` and
+`proposals/{id}/decision`, `negotiations` and `negotiate`, `audit`, `guest/links` (GET/POST),
+`guest/links/{id}/revoke`, `guest/links/{id}/url` (returns the full link once, nonce-guarded
+against replay), `node` (GET) and `node/probe` (POST).
+
+Guest channel (no admin token — the token *is* the credential): `GET /book`,
+`GET /book/<token>`, `POST /book/<token>` (submit a time preference) and
+`GET /book/<token>/invite.ics` (only serves an .ics once the owner has approved).
 
 Developer API (Telegram-style, prefix `/api/v1`, each method mounted twice: bare path and
 `/bot<TOKEN>/…`):
@@ -166,10 +224,126 @@ Developer API (Telegram-style, prefix `/api/v1`, each method mounted twice: bare
 Inbound webhook delivery: `POST /api/v1/hooks/<bot_id>/<secret>`, claimed by whichever
 enabled plugin owns that `secret`.
 
-## 5. Built-in plugins
+## 5. The stand-in robot (24/7)
+
+Each inbound message is split in two halves: **the small on-device model only extracts intent,
+the large model only writes wording**, and no calendar change happens until the owner approves.
+
+### 5.1 Extraction engine and dual-engine routing
+
+- `needle3_runtime.py` loads `Cactus-Compute/needle3` (`needle3.cact`, 33.7 MiB, 121 M parameters,
+  engine 3.1.0) and produces one of five tool calls in milliseconds: `calendar.get_availability`,
+  `calendar.propose_create`, `calendar.propose_reschedule`, `calendar.propose_cancel`,
+  `workspace.summarize_file`. All five tool functions are **read-only echo stubs** (`TOOL_STUBS`):
+  they record arguments for the layer above, never write a calendar and never read file contents.
+- Weights are loaded from the in-repo path only after `needle_assets.ensure_weights()` passes the
+  SHA-256 gate — **no model is ever downloaded at runtime**. The manifest and the re-fetch recipe are
+  in `studio/assets/models/needle3.manifest.json`; verify independently with
+  `python3 official_tools/verify_needle_assets.py` (both installers and `--check` run it, and an
+  install aborts if it fails).
+- No C runtime, missing SDK, a failed checksum or a load error all degrade to the built-in
+  **deterministic extractor**: Chinese and English patterns for booking, asking availability,
+  rescheduling, cancelling and summarising, plus relative dates (tomorrow, 周四, next week),
+  clock times (下午三点, 3pm, 15:00), durations (半小时, 45 min) and timezone hints. The clock comes
+  in through `hints={"now": …}`, so self-test results never depend on the day they run. The engine
+  identity, the degradation reason and the call counters are all exposed via `status()`; extraction
+  never raises into the caller. Measured here on the fallback path, 2400 mixed sentences: median
+  0.05 ms per message — the same figure `extract()` reports as `latency_ms`.
+- `reasoner_bridge.py` writes the copy: Ollama native (`/api/generate`, `/api/chat`) and
+  OpenAI-compatible (`/v1/chat/completions`) dialects are normalised from the URL. The system prompt
+  forbids adding, changing or guessing any time, date, timezone, duration, name or place, and
+  forbids claiming the calendar was written. Every failure (disabled, illegal address, timeout,
+  non-200, no copy field) falls back to an `agent_copy` template with the reason recorded, non-200
+  counts as an error too, and outbound error text always goes through `redact()` — both key-name
+  shapes (`Authorization: Bearer …`, `"api_key": "…"`, `REASONER_API_KEY='…'`, bare `key=…`) and
+  token shapes (`sk-`, `ghp_`, `xoxb-`, …). Plaintext `http` is loopback-only, remote endpoints must
+  be `https`, and userinfo in the URL is refused.
+- Availability and persistence come from the Mac Node; when it is unreachable the runtime reads the
+  masked local `calendar_cache`, which stores slots only — never titles.
+
+### 5.2 Per-Bot preference rules
+
+Rules live in `<STUDIO_DATA_DIR>/bots/<bot_id>/agent/preferences.json` (dir `0700`, file `0600`,
+one per Bot, never shared). A `version` that disagrees with the code is refused and replaced by the
+defaults, and that rescue is recorded. Editable sections: `working_hours` (weekdays and
+start/end, where `end` may be `24:00`), `buffers` (pre/post meeting buffers, which only clamp
+against the working-hours bounds), `blocked_periods` (fixed blocks, judged against the raw
+candidate span), `keywords.boost/block` with `match_fields`, `meeting` (default duration, maximum
+duration, minimum gap), `negotiation` and `copy`. Hard limits: `require_owner_approval` must stay
+`true` — only the owner taps the final confirmation and no rule can override that; at most 40
+keywords per list, blocked-period ids up to 24 characters, durations and buffers bounded. Every
+rejected candidate returns a readable reason ("Thursday is not a working day", "with buffers this
+falls outside 09:00-18:00 (needs 10:00-11:00 ±15/10 min)", "hits the blocked period 「lunch」",
+"that slot is in the past", "a slot spanning days needs the owner's own confirmation"), and those
+reasons go to the audit log instead of being swallowed.
+
+### 5.3 Confirmation card and local persistence
+
+Mobile and desktop render the `::POPOPX_ECO::` dynamic confirmation card (codec rules in
+`eco_cards.py`, sharing the client constraints of the `::CB::` inbound frame). The owner taps
+confirm → the orchestration layer calls `mac_node_bridge.MacNodeBridge.approve` (strict loopback
+`http://127.0.0.1:18920` or `http://localhost:18920`, carrying `X-PPX-Token`; non-loopback hosts
+are rejected in `load_settings()`) → the proposal becomes `approved` in the ledger → both sides get
+an RFC 5545 invite generated by `ics.py`. Restart and cold-restore revival are idempotent.
+
+### 5.4 Channel A: encrypted A2A negotiation
+
+Frame format `::POPOPX_A2A::<base64url(json)>.<base64url(hmac-sha256)>`, signed with the **peer
+session key** (the SMP channel already has one), verified with `hmac.compare_digest` plus a version,
+a time window and nonce replay protection. "Masked candidate slots only" is enforced structurally by
+three independent gates: `mask_slots` rebuilds each slot through a whitelist projection (only
+`start/end/tz/free/ref` can survive; a `title` pushed from upstream does not), `encode_frame` walks
+the payload before signing and refuses to send if any `FORBIDDEN_KEYS` name appears, and
+`intersect_slots` works purely in absolute epochs — wall-clock text never enters the arithmetic, so
+timezone and DST errors are not representable. The state machine `open → converged/rejected/expired/
+aborted` lives on `a2a_negotiations`, every transition writes one audit row whose detail may contain
+only ids, counters and reason codes, and `converged` produces **one `pending` proposal and writes not
+a single byte to the calendar**. Rescheduling is an explicit `counter` re-open (the old proposal
+becomes `superseded`); `expired/rejected/aborted` rows can never be revived.
+
+### 5.5 Channel B: zero-install guest booking
+
+The owner mints `<base>/book/<one_time_token>`: a self-verifying HMAC token carrying only
+`{v,lid,iat,exp,mus,dur}` — the owner's identity and calendar never enter the token. Opening it runs
+signature → version → expiry → revocation → visit budget → claim, and the visit counter is a
+one-shot check-and-set inside a `threading.Lock` (two concurrent coroutines would otherwise both
+pass the budget check). The budget is `min(token mus, max_uses in the ledger)`: raising the stored
+number afterwards cannot revive a spent single-use token, and tightening it takes effect immediately,
+as does revocation (status is re-read on every request, no authorisation is cached). The visitor
+writes a time preference, the portal asks the injected availability source for **masked** free slots
+(if it returns nothing it says so honestly rather than inventing slots), and once a single slot
+converges it stores a `pending` proposal with `source="guest"` and pushes the `::POPOPX_ECO::` card
+to the owner. Before that approval, `GET /book/<token>/invite.ics` serves nothing. The `VEVENT`
+contains only a meeting-room link or a "POPOPX Chat call" note — never the owner's real address,
+name, e-mail or full schedule. The page is self-contained HTML: no session, no cookie, no
+`<script>`, no external reference, visitor input HTML-escaped, the form posts to `action=""`, and
+all 18 locales ship with identical placeholders.
+
+### 5.6 New configuration keys
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `AGENT_ENABLED` | `1` | master switch for the stand-in (off = messages keep using the existing rules/router/plugin chain) |
+| `REASONER_ENABLED` | `0` | let the large model write the copy; off means everything comes from `agent_copy` templates |
+| `REASONER_BASE_URL` | empty | reasoner endpoint; plaintext http only for loopback, https required remotely |
+| `REASONER_MODEL` | empty | model name (same field in both dialects) |
+| `REASONER_API_KEY` | empty | request header only, masked on read and write, never logged or prompted |
+| `REASONER_TIMEOUT_SECONDS` | `20.0` | per-request timeout |
+| `MAC_NODE_ENABLED` | `0` | enable the Mac Node bridge (availability reads and approval persistence) |
+| `MAC_NODE_URL` | `http://127.0.0.1:18920` | only `127.0.0.1` / `localhost` are accepted |
+| `MAC_NODE_TOKEN` | empty | sent as the `X-PPX-Token` header |
+| `MAC_NODE_TIMEOUT_SECONDS` | `8.0` | bridge timeout |
+| `GUEST_ENABLED` | `1` | guest portal switch |
+| `GUEST_SECRET` | empty | HMAC key for the links; without it no link can be minted |
+| `GUEST_PUBLIC_BASE_URL` | empty | externally reachable base URL (required behind a reverse proxy) |
+| `GUEST_DEFAULT_TTL_HOURS` | `72` | default lifetime of a one-time link |
+| `AGENT_MEETING_BASE_URL` | empty | base of the meeting-room link written into the .ics |
+
+## 6. Built-in plugins
 
 | plugin_id | Priority | Scope | Function |
 | --- | --- | --- | --- |
+| `personal_agent` | 30 | message | the 24/7 stand-in: hands inbound messages to Needle 3 for intent extraction, filters slots through the per-Bot preference rules, and produces proposals plus the `::POPOPX_ECO::` card (see section 5) |
 | `webhook_relay` | 40 | message | pushes external monitoring alerts from `POST /api/v1/hooks/<bot>/<secret>` to groups/contacts, and relays inbound messages to the Bot's `webhook_url` |
 | `auto_reply` | 60 | message | keyword and command auto-reply, nested command menus, scheduled announcements (rules live in the plugin config, editable in the UI) |
 | `msg_router` | 65 | message | cross-chat routing: opens a ticket from a customer's direct chat into a group, replies in the group with the ticket number to hand it back |
@@ -181,7 +355,7 @@ increments `errors` and writes one `status="error"` log line, it can never take 
 down. Plugins run in ascending `priority` order and the first `handled=True` result stops
 the chain. `password` fields are masked as `********` on both read and write paths.
 
-## 6. Internationalisation
+## 7. Internationalisation
 
 - 18 iOS-aligned locales: `en, zh-Hans, zh-Hant, ja, bg, cs, de, es, fi, fr, hu, it, nl, pl, ru, th, tr, uk`;
   any missing entry falls back to `en`.
@@ -193,8 +367,13 @@ the chain. `password` fields are masked as `********` on both read and write pat
 - The `i18n` self-test group asserts that every locale's key set matches `en` exactly, that
   placeholders never drift and that no entry is empty; `/api/admin/i18n/parity` exposes the
   same check at runtime.
+- The stand-in keeps its own catalog: 12 kinds × 18 locales in `agent_copy.py`, gated by
+  `agent_copy.assert_catalog()` on four invariants — identical key sets, identical placeholder
+  sets, numbers that come from facts rather than from the translation, and script families (a
+  Han character inside a Hungarian sentence is a copy-paste accident the placeholder check cannot
+  see). The guest page requires the same 18-locale parity with matching placeholders.
 
-## 7. Offline cold backup
+## 8. Offline cold backup
 
 ```bash
 cd studio
@@ -217,7 +396,7 @@ Exit codes: `0` ok / `1` runtime error / `2` usage error / `3` Bot not found /
 `4` Bot deleted / `5` destination not writable / `6` corrupt or failed verification /
 `7` passphrase problem / `8` ledger write failure.
 
-## 8. Self-test
+## 9. Self-test
 
 ```bash
 cd studio
@@ -228,23 +407,32 @@ cd studio
 
 | Group | Assertions | Coverage |
 | --- | --- | --- |
-| `config` | 62 | environment parsing, loopback constraint, permission warnings |
-| `database` | 110 | ledger CRUD, migrations, soft delete, plugin config |
+| `config` | 62 | environment parsing, loopback constraint, permission warnings, illegal Mac Node/reasoner endpoints |
+| `database` | 110 | ledger CRUD, migrations v1..v5, soft delete, plugin config, proposal/negotiation/guest tables |
+| `agent_ledger` | 139 | proposal and negotiation state persistence, audit writes, availability cache, idempotency |
 | `ws_protocol` | 103 | line-protocol frames, command grammar, probe commands and error-frame wake-ups, errors and timeouts |
 | `supervisor` | 86 | port allocation, isolated dirs, wrapper and first-launch profile name, reconnect backoff |
 | `provisioning` | 66 | Bot creation, `/_address`, name and avatar retention, restart and cold-restore idempotency |
 | `rules` | 60 | exact/prefix/regex/default matching and priority |
 | `router` | 78 | keyword routing, ticket ids, templates and cooldown |
 | `gateway` | 94 | inbound pipeline, plugin dispatch, update buffer |
-| `plugins` | 94 | discovery, lifecycle, masking, isolation and counters |
+| `plugins` | 104 | discovery, lifecycle, masking, isolation and counters (including `personal_agent`) |
 | `open_api` | 119 | five methods, auth, idempotency, long polling, webhook |
 | `web_admin` | 146 | console routes, CSRF/cookie, authorisation and audit |
 | `i18n` | 320 | 18-locale completeness, negotiation, welcome text, page injection |
 | `web_live` | 55 | real ASGI lifecycle, WebSocket, cold-backup round trip |
 | `bundle` | 250 | export/verify/tamper/cross-ledger migration/idempotency |
-| `install` | 241 | script syntax and flags, dry runs, service-user primary group vs `--group` (including a stubbed real run of `create_service_user`), loopback and zero-bundling, no stubs |
+| `eco_cards` | 89 | `::POPOPX_ECO::` card and `::CB::` receipt codec, rejection of out-of-contract fields |
+| `ics` | 65 | RFC 5545 escaping, UTC instants, UID/DUMPSTAMP, durations and day-spanning events |
+| `install` | 276 | script syntax and flags, dry runs, service-user primary group vs `--group` (including a stubbed real run of `create_service_user`), loopback and zero-bundling, bundled-weight manifest check, no stubs |
+| `mac_node` | 201 | strict loopback and SSRF blocking, `X-PPX-Token`, status/availability/approve, timeouts and degradation |
+| `a2a` | 220 | masked projection, the `FORBIDDEN_KEYS` gate, HMAC signing and replay, timezone intersection, state machine |
+| `guest_portal` | 571 | token issue/verify/expiry/revocation/visit budget, concurrent claims, masked availability, the .ics gate, page escaping |
+| `agent_engine` | 3552 | Needle 3 extraction and the deterministic fallback, the weight SHA-256 gate, preference rules, copy and reasoner degradation, secret hygiene |
+| `agent_console` | 389 | `/api/agent/*` and `/book/*` routes, auth, panel data shapes, 18-locale strings |
+| total | **7155** | 23/23 groups, 0 failures, exit code 0 |
 
-## 9. Operations and security notes
+## 10. Operations and security notes
 
 - The admin token is the only gate: keep the bind on loopback, or put a TLS reverse proxy
   in front. `--lan` is an explicitly auditable decision.
@@ -264,7 +452,33 @@ cd studio
   Web-side restart of the same Bot must both reuse it. `--user-display-name` is injected on the
   first launch of an empty cli-data only: keeping it resident would turn "rename this Bot" into
   "the CLI never starts again".
+- Stand-in data is not in the cold bundle: `export_bot_bundle.py` packs `cli-data/` plus the rules
+  in the ledger, so `agent/preferences.json` needs its own backup. It is `0700`/`0600` like
+  cli-data, but losing it means reconfiguring.
+- **A guest link is the credential**: whoever holds `/book/<token>` can spend one visit slot. Share
+  it over a private or encrypted channel and revoke it when done. Rotating `GUEST_SECRET`
+  invalidates every outstanding link immediately — that is the intent, not a bug.
+- After rotating `MAC_NODE_TOKEN`, update `.env` too, or every `approve` fails; a failing bridge
+  only degrades to template copy and logs `approve_failed`, so the calendar is never silently
+  corrupted, but the proposal stays `pending`.
+- A2A adds no new root of trust: only an already-paired peer can write into that SMP queue, so the
+  signing key is the peer session key. Negotiation audit rows carry ids, counters and reason codes
+  only — never copy or titles.
+- To keep the stand-in fully offline: `REASONER_ENABLED=0` makes all copy come from the 18-locale
+  templates and the chain touches no network. With `MAC_NODE_ENABLED=0` the persistence and
+  availability reads fall back to the masked local cache, and the card flow still works.
 
-## 10. Licence
+## 11. Licence
 
 AGPL-3.0-only, see `LICENSE`. No `popopx-chat` binary is distributed from this repository.
+
+Bundled third-party model asset: `studio/assets/models/needle3.cact` and its
+`config-needle3.json` are Needle 3 weights from Cactus-Compute, SHA-256
+`c9d915eca282ed42d1a09b143b592adb4cc6744ffe2d294adf5cfc5548170c38` (35,335,380 bytes), licensed
+under **Apache-2.0**; the text is `studio/assets/models/LICENSE-needle3.txt` (SHA-256
+`cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30`). Attribution as recorded in the
+manifest: *Needle 3 weights (c) Cactus Compute, Apache License 2.0. Not authored or endorsed by the
+POPOPX project.* The file ships with this repository and is never fetched at runtime; deleting
+`studio/assets/models/needle3.cact` leaves Studio working — `needle_assets` fails the check and the
+runtime uses its deterministic extractor instead (section 5.1), it simply stops using the on-device
+model.

@@ -14,12 +14,13 @@ import secrets
 import sqlite3
 import threading
 import time
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .config import SECURE_FILE_MODE
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _ID_RE = re.compile(r"^[a-z0-9_-]{3,64}$")
 TRIGGER_TYPES = ("exact", "prefix", "regex", "default")
@@ -28,6 +29,24 @@ TARGET_TYPES = ("group", "contact", "broadcast")
 BOT_STATUSES = ("draft", "stopped", "running", "error", "deleted")
 DIRECTIONS = ("in", "out")
 LOG_STATUSES = ("ok", "cooldown", "skipped", "error", "forwarded", "no_match")
+PROPOSAL_ACTIONS = ("create", "reschedule", "cancel")
+PROPOSAL_STATUSES = ("pending", "approved", "declined", "expired", "failed", "superseded")
+PROPOSAL_SOURCES = ("a2a", "guest", "direct", "operator")
+NEGOTIATION_STATUSES = ("open", "converged", "rejected", "expired", "aborted")
+GUEST_LINK_STATUSES = ("active", "exhausted", "revoked", "expired")
+GUEST_ROLES = ("visitor", "bot", "owner")
+AUDIT_STAGES = (
+    "needle",
+    "preference",
+    "reasoner",
+    "mac_node",
+    "a2a",
+    "card",
+    "guest",
+    "ics",
+    "lifecycle",
+)
+AUDIT_LEVELS = ("info", "warn", "error")
 
 
 class LedgerError(RuntimeError):
@@ -167,6 +186,146 @@ _MIGRATIONS: Tuple[Tuple[int, str, Tuple[str, ...]], ...] = (
             "ALTER TABLE bots ADD COLUMN default_locale TEXT NOT NULL DEFAULT ''",
         ),
     ),
+    (
+        5,
+        "替身机器人：日历提案 / A2A 协商 / 访客一次性链接 / 协商审计 / 忙闲缓存",
+        (
+            """
+            CREATE TABLE IF NOT EXISTS agent_proposals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                proposal_id TEXT NOT NULL UNIQUE,
+                bot_id TEXT NOT NULL,
+                action TEXT NOT NULL CHECK (action IN ('create','reschedule','cancel')),
+                status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending','approved','declined','expired','failed','superseded')),
+                source TEXT NOT NULL DEFAULT 'a2a'
+                    CHECK (source IN ('a2a','guest','direct','operator')),
+                card_id TEXT NOT NULL DEFAULT '',
+                chat_type TEXT NOT NULL DEFAULT '',
+                chat_ref TEXT NOT NULL DEFAULT '',
+                counterparty TEXT NOT NULL DEFAULT '',
+                timezone TEXT NOT NULL DEFAULT '',
+                start_ts REAL NOT NULL DEFAULT 0,
+                end_ts REAL NOT NULL DEFAULT 0,
+                duration_minutes INTEGER NOT NULL DEFAULT 0,
+                summary TEXT NOT NULL DEFAULT '',
+                payload TEXT NOT NULL DEFAULT '{}',
+                negotiation_id TEXT NOT NULL DEFAULT '',
+                link_id TEXT NOT NULL DEFAULT '',
+                ticket_id TEXT NOT NULL DEFAULT '',
+                ics_path TEXT NOT NULL DEFAULT '',
+                node_event_id TEXT NOT NULL DEFAULT '',
+                error TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                decided_at REAL NOT NULL DEFAULT 0
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_agent_proposals_bot_ts ON agent_proposals (bot_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_agent_proposals_status ON agent_proposals (status, updated_at)",
+            "CREATE INDEX IF NOT EXISTS idx_agent_proposals_card ON agent_proposals (card_id)",
+            """
+            CREATE TABLE IF NOT EXISTS a2a_negotiations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                negotiation_id TEXT NOT NULL UNIQUE,
+                bot_id TEXT NOT NULL,
+                peer_identity TEXT NOT NULL DEFAULT '',
+                peer_label TEXT NOT NULL DEFAULT '',
+                channel TEXT NOT NULL DEFAULT 'a2a' CHECK (channel IN ('a2a','guest')),
+                status TEXT NOT NULL DEFAULT 'open'
+                    CHECK (status IN ('open','converged','rejected','expired','aborted')),
+                round INTEGER NOT NULL DEFAULT 0,
+                owner_timezone TEXT NOT NULL DEFAULT '',
+                peer_timezone TEXT NOT NULL DEFAULT '',
+                window_start REAL NOT NULL DEFAULT 0,
+                window_end REAL NOT NULL DEFAULT 0,
+                duration_minutes INTEGER NOT NULL DEFAULT 60,
+                owner_slots TEXT NOT NULL DEFAULT '[]',
+                peer_slots TEXT NOT NULL DEFAULT '[]',
+                intersection TEXT NOT NULL DEFAULT '[]',
+                agreed_slot TEXT NOT NULL DEFAULT '{}',
+                proposal_id TEXT NOT NULL DEFAULT '',
+                last_error TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                expires_at REAL NOT NULL DEFAULT 0
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_a2a_negotiations_bot ON a2a_negotiations (bot_id, status, updated_at)",
+            "CREATE INDEX IF NOT EXISTS idx_a2a_negotiations_peer ON a2a_negotiations (bot_id, peer_identity)",
+            """
+            CREATE TABLE IF NOT EXISTS guest_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                link_id TEXT NOT NULL UNIQUE,
+                bot_id TEXT NOT NULL,
+                token TEXT NOT NULL UNIQUE,
+                label TEXT NOT NULL DEFAULT '',
+                topic TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active','exhausted','revoked','expired')),
+                max_uses INTEGER NOT NULL DEFAULT 1,
+                uses INTEGER NOT NULL DEFAULT 0,
+                duration_minutes INTEGER NOT NULL DEFAULT 60,
+                timezone TEXT NOT NULL DEFAULT '',
+                proposal_id TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                created_by TEXT NOT NULL DEFAULT '',
+                expires_at REAL NOT NULL,
+                last_used_at REAL NOT NULL DEFAULT 0,
+                revoked_at REAL NOT NULL DEFAULT 0
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_guest_links_bot_status ON guest_links (bot_id, status, expires_at)",
+            """
+            CREATE TABLE IF NOT EXISTS guest_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bot_id TEXT NOT NULL,
+                link_id TEXT NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('visitor','bot','owner')),
+                text TEXT NOT NULL DEFAULT '',
+                proposal_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'ok',
+                visitor_hash TEXT NOT NULL DEFAULT '',
+                ts REAL NOT NULL
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_guest_messages_link ON guest_messages (link_id, ts)",
+            """
+            CREATE TABLE IF NOT EXISTS negotiation_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bot_id TEXT NOT NULL DEFAULT '',
+                stage TEXT NOT NULL CHECK (stage IN
+                    ('needle','preference','reasoner','mac_node','a2a','card','guest','ics','lifecycle')),
+                event TEXT NOT NULL,
+                level TEXT NOT NULL DEFAULT 'info' CHECK (level IN ('info','warn','error')),
+                proposal_id TEXT NOT NULL DEFAULT '',
+                negotiation_id TEXT NOT NULL DEFAULT '',
+                link_id TEXT NOT NULL DEFAULT '',
+                chat_ref TEXT NOT NULL DEFAULT '',
+                detail TEXT NOT NULL DEFAULT '',
+                data TEXT NOT NULL DEFAULT '{}',
+                latency_ms REAL NOT NULL DEFAULT 0,
+                ts REAL NOT NULL
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_negotiation_audit_bot_ts ON negotiation_audit (bot_id, ts)",
+            "CREATE INDEX IF NOT EXISTS idx_negotiation_audit_proposal ON negotiation_audit (proposal_id, ts)",
+            """
+            CREATE TABLE IF NOT EXISTS calendar_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bot_id TEXT NOT NULL,
+                day TEXT NOT NULL,
+                timezone TEXT NOT NULL DEFAULT '',
+                busy TEXT NOT NULL DEFAULT '[]',
+                source TEXT NOT NULL DEFAULT 'mac_node',
+                fetched_at REAL NOT NULL,
+                expires_at REAL NOT NULL,
+                UNIQUE (bot_id, day, source)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_calendar_cache_expiry ON calendar_cache (expires_at)",
+        ),
+    ),
 )
 
 
@@ -182,6 +341,36 @@ def new_bot_id(prefix: str = "bot") -> str:
 def new_bot_token() -> str:
     """Return a developer API token usable as ``/bot<token>/getMe``."""
     return f"{secrets.randbelow(90000000) + 10000000}:{secrets.token_hex(16)}"
+
+
+def new_proposal_id() -> str:
+    """Identifier for one calendar proposal awaiting owner confirmation."""
+    return f"pr_{secrets.token_hex(6)}"
+
+
+def new_negotiation_id() -> str:
+    return f"ng_{secrets.token_hex(6)}"
+
+
+def new_guest_link_id() -> str:
+    return f"gl_{secrets.token_hex(5)}"
+
+
+def _json_dump(value: Any, *, label: str) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except (TypeError, ValueError) as exc:
+        raise LedgerError(f"{label}不可序列化：{exc}") from exc
+
+
+def _json_load(raw: Any, default: Any) -> Any:
+    if raw in (None, ""):
+        return default
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if isinstance(value, type(default)) else default
 
 
 def _rows(cursor: sqlite3.Cursor) -> List[Dict[str, Any]]:
@@ -410,7 +599,17 @@ class Database:
         with self._lock:
             if hard:
                 self.conn.execute("DELETE FROM bots WHERE id = ?", (bot_id,))
-                for table in ("reply_rules", "routing_rules", "plugin_configs"):
+                for table in (
+                    "reply_rules",
+                    "routing_rules",
+                    "plugin_configs",
+                    "agent_proposals",
+                    "a2a_negotiations",
+                    "guest_links",
+                    "guest_messages",
+                    "negotiation_audit",
+                    "calendar_cache",
+                ):
                     self.conn.execute(f"DELETE FROM {table} WHERE bot_id = ?", (bot_id,))
             else:
                 self.conn.execute(
@@ -838,6 +1037,775 @@ class Database:
                     params,
                 )
             )
+
+
+    # ------------------------------------------------------- agent proposals
+    PROPOSAL_FIELDS = (
+        "status",
+        "card_id",
+        "chat_type",
+        "chat_ref",
+        "counterparty",
+        "timezone",
+        "start_ts",
+        "end_ts",
+        "duration_minutes",
+        "summary",
+        "payload",
+        "negotiation_id",
+        "link_id",
+        "ticket_id",
+        "ics_path",
+        "node_event_id",
+        "error",
+        "decided_at",
+    )
+    PROPOSAL_DECIDED = ("approved", "declined", "failed", "superseded")
+
+    def create_proposal(
+        self,
+        bot_id: str,
+        action: str,
+        *,
+        source: str = "a2a",
+        proposal_id: Optional[str] = None,
+        chat_type: str = "",
+        chat_ref: str = "",
+        counterparty: str = "",
+        timezone: str = "",
+        start_ts: float = 0.0,
+        end_ts: float = 0.0,
+        duration_minutes: int = 0,
+        summary: str = "",
+        payload: Optional[Dict[str, Any]] = None,
+        negotiation_id: str = "",
+        link_id: str = "",
+        ticket_id: str = "",
+    ) -> Dict[str, Any]:
+        if action not in PROPOSAL_ACTIONS:
+            raise LedgerError(f"非法提案动作 {action!r}")
+        if source not in PROPOSAL_SOURCES:
+            raise LedgerError(f"非法提案来源 {source!r}")
+        identifier = proposal_id or new_proposal_id()
+        if not _ID_RE.match(identifier):
+            raise LedgerError(f"提案 id 非法：{identifier!r}")
+        now = time.time()
+        with self._lock:
+            try:
+                self.conn.execute(
+                    """
+                    INSERT INTO agent_proposals (proposal_id, bot_id, action, status, source, card_id,
+                        chat_type, chat_ref, counterparty, timezone, start_ts, end_ts, duration_minutes,
+                        summary, payload, negotiation_id, link_id, ticket_id, error, created_at, updated_at)
+                    VALUES (?, ?, ?, 'pending', ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)
+                    """,
+                    (
+                        identifier,
+                        bot_id,
+                        action,
+                        source,
+                        chat_type,
+                        chat_ref,
+                        counterparty,
+                        timezone,
+                        float(start_ts),
+                        float(end_ts),
+                        int(duration_minutes),
+                        summary,
+                        _json_dump(payload or {}, label="提案负载"),
+                        negotiation_id,
+                        link_id,
+                        ticket_id,
+                        now,
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:  # proposal_id 撞 UNIQUE
+                raise LedgerError(f"创建提案失败：{exc}") from exc
+        record = self.get_proposal(identifier)
+        assert record is not None
+        return record
+
+    def get_proposal(self, proposal_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM agent_proposals WHERE proposal_id = ?", (proposal_id,)
+            ).fetchone()
+        return _proposal_record(row) if row else None
+
+    def find_proposal_by_card(self, card_id: str) -> Optional[Dict[str, Any]]:
+        if not card_id:
+            return None
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM agent_proposals WHERE card_id = ? ORDER BY updated_at DESC LIMIT 1",
+                (card_id,),
+            ).fetchone()
+        return _proposal_record(row) if row else None
+
+    def list_proposals(
+        self,
+        bot_id: Optional[str] = None,
+        *,
+        status: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        limit = max(1, min(int(limit), 500))
+        clauses: List[str] = []
+        params: List[Any] = []
+        if bot_id is not None:
+            clauses.append("bot_id = ?")
+            params.append(bot_id)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+        params.append(limit)
+        with self._lock:
+            rows = _rows(
+                self.conn.execute(
+                    f"SELECT * FROM agent_proposals {where}ORDER BY created_at DESC LIMIT ?", params
+                )
+            )
+        return [_proposal_record(row) for row in rows]
+
+    def update_proposal(self, proposal_id: str, **fields: Any) -> Dict[str, Any]:
+        unknown = set(fields) - set(self.PROPOSAL_FIELDS)
+        if unknown:
+            raise LedgerError(f"agent_proposals 不接受字段 {sorted(unknown)}")
+        status = fields.get("status")
+        if status is not None and status not in PROPOSAL_STATUSES:
+            raise LedgerError(f"非法提案状态 {status!r}")
+        if "payload" in fields and not isinstance(fields["payload"], dict):
+            raise LedgerError("提案负载必须是 JSON 对象")
+        if not fields:
+            record = self.get_proposal(proposal_id)
+            if record is None:
+                raise LedgerError(f"提案 {proposal_id} 不存在")
+            return record
+        if status in self.PROPOSAL_DECIDED and not fields.get("decided_at"):
+            fields["decided_at"] = time.time()
+        assignments = ", ".join(f"{key} = ?" for key in fields)
+        params = [
+            _json_dump(fields[key], label=f"提案 {key}") if key == "payload" else fields[key]
+            for key in fields
+        ]
+        params += [time.time(), proposal_id]
+        with self._lock:
+            cursor = self.conn.execute(
+                f"UPDATE agent_proposals SET {assignments}, updated_at = ? WHERE proposal_id = ?",
+                params,
+            )
+            if cursor.rowcount == 0:
+                raise LedgerError(f"提案 {proposal_id} 不存在")
+        record = self.get_proposal(proposal_id)
+        assert record is not None
+        return record
+
+    def expire_proposals(self, *, now: Optional[float] = None) -> int:
+        """Pending proposals past their card window (or older than a day) expire."""
+        moment = time.time() if now is None else float(now)
+        with self._lock:
+            cursor = self.conn.execute(
+                """
+                UPDATE agent_proposals SET status = 'expired', updated_at = ?, decided_at = ?
+                WHERE status = 'pending'
+                  AND ((json_extract(payload, '$.expires_at') > 0
+                        AND json_extract(payload, '$.expires_at') <= ?)
+                       OR created_at < ? - 86400)
+                """,
+                (moment, moment, moment, moment),
+            )
+        return int(cursor.rowcount or 0)
+
+    def proposal_stats(self, bot_id: Optional[str] = None) -> Dict[str, Any]:
+        clauses: List[str] = []
+        params: List[Any] = []
+        if bot_id is not None:
+            clauses.append("bot_id = ?")
+            params.append(bot_id)
+        where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+        with self._lock:
+            rows = _rows(
+                self.conn.execute(
+                    f"SELECT action, status, COUNT(*) AS total FROM agent_proposals {where}"
+                    "GROUP BY action, status",
+                    params,
+                )
+            )
+        breakdown: Dict[str, int] = {}
+        totals: Dict[str, int] = {"pending": 0, "approved": 0, "declined": 0, "expired": 0, "failed": 0, "superseded": 0}
+        for row in rows:
+            total = int(row["total"])
+            breakdown[f"{row['action']}:{row['status']}"] = total
+            if row["status"] in totals:
+                totals[row["status"]] += total
+        return {"breakdown": breakdown, "totals": totals, **totals}
+
+    # --------------------------------------------------------- A2A negotiations
+    NEGOTIATION_FIELDS = (
+        "peer_label",
+        "channel",
+        "status",
+        "round",
+        "owner_timezone",
+        "peer_timezone",
+        "window_start",
+        "window_end",
+        "duration_minutes",
+        "owner_slots",
+        "peer_slots",
+        "intersection",
+        "agreed_slot",
+        "proposal_id",
+        "last_error",
+        "expires_at",
+    )
+    NEGOTIATION_JSON = ("owner_slots", "peer_slots", "intersection", "agreed_slot")
+
+    def create_negotiation(
+        self,
+        bot_id: str,
+        peer_identity: str,
+        *,
+        negotiation_id: Optional[str] = None,
+        peer_label: str = "",
+        channel: str = "a2a",
+        owner_timezone: str = "",
+        peer_timezone: str = "",
+        window_start: float = 0.0,
+        window_end: float = 0.0,
+        duration_minutes: int = 60,
+        expires_at: float = 0.0,
+        owner_slots: Optional[Sequence[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        if channel not in ("a2a", "guest"):
+            raise LedgerError(f"非法协商通道 {channel!r}")
+        identifier = negotiation_id or new_negotiation_id()
+        if not _ID_RE.match(identifier):
+            raise LedgerError(f"协商 id 非法：{identifier!r}")
+        now = time.time()
+        with self._lock:
+            try:
+                self.conn.execute(
+                    """
+                    INSERT INTO a2a_negotiations (negotiation_id, bot_id, peer_identity, peer_label, channel,
+                        status, round, owner_timezone, peer_timezone, window_start, window_end, duration_minutes,
+                        owner_slots, peer_slots, intersection, agreed_slot, proposal_id, last_error,
+                        created_at, updated_at, expires_at)
+                    VALUES (?, ?, ?, ?, ?, 'open', 0, ?, ?, ?, ?, ?, ?, '[]', '[]', '{}', '', '', ?, ?, ?)
+                    """,
+                    (
+                        identifier,
+                        bot_id,
+                        peer_identity,
+                        peer_label,
+                        channel,
+                        owner_timezone,
+                        peer_timezone,
+                        float(window_start),
+                        float(window_end),
+                        int(duration_minutes),
+                        _json_dump(list(owner_slots or []), label="候选时段"),
+                        now,
+                        now,
+                        float(expires_at),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:  # negotiation_id 撞 UNIQUE
+                raise LedgerError(f"创建协商失败：{exc}") from exc
+        record = self.get_negotiation(identifier)
+        assert record is not None
+        return record
+
+    def get_negotiation(self, negotiation_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM a2a_negotiations WHERE negotiation_id = ?", (negotiation_id,)
+            ).fetchone()
+        return _negotiation_record(row) if row else None
+
+    def find_open_negotiation(self, bot_id: str, peer_identity: str) -> Optional[Dict[str, Any]]:
+        if not peer_identity:
+            return None
+        with self._lock:
+            row = self.conn.execute(
+                """
+                SELECT * FROM a2a_negotiations
+                WHERE bot_id = ? AND peer_identity = ? AND status = 'open'
+                  AND (expires_at = 0 OR expires_at > ?)
+                ORDER BY updated_at DESC LIMIT 1
+                """,
+                (bot_id, peer_identity, time.time()),
+            ).fetchone()
+        return _negotiation_record(row) if row else None
+
+    def list_negotiations(
+        self,
+        bot_id: Optional[str] = None,
+        *,
+        status: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        limit = max(1, min(int(limit), 500))
+        clauses: List[str] = []
+        params: List[Any] = []
+        if bot_id is not None:
+            clauses.append("bot_id = ?")
+            params.append(bot_id)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+        params.append(limit)
+        with self._lock:
+            rows = _rows(
+                self.conn.execute(
+                    f"SELECT * FROM a2a_negotiations {where}ORDER BY created_at DESC LIMIT ?", params
+                )
+            )
+        return [_negotiation_record(row) for row in rows]
+
+    def update_negotiation(self, negotiation_id: str, **fields: Any) -> Dict[str, Any]:
+        unknown = set(fields) - set(self.NEGOTIATION_FIELDS)
+        if unknown:
+            raise LedgerError(f"a2a_negotiations 不接受字段 {sorted(unknown)}")
+        if "status" in fields and fields["status"] not in NEGOTIATION_STATUSES:
+            raise LedgerError(f"非法协商状态 {fields['status']!r}")
+        if not fields:
+            record = self.get_negotiation(negotiation_id)
+            if record is None:
+                raise LedgerError(f"协商 {negotiation_id} 不存在")
+            return record
+        params: List[Any] = []
+        for key, value in fields.items():
+            if key in self.NEGOTIATION_JSON and not isinstance(value, str):
+                params.append(_json_dump(value, label=f"协商 {key}"))
+            else:
+                params.append(value)
+        assignments = ", ".join(f"{key} = ?" for key in fields)
+        params += [time.time(), negotiation_id]
+        with self._lock:
+            cursor = self.conn.execute(
+                f"UPDATE a2a_negotiations SET {assignments}, updated_at = ? WHERE negotiation_id = ?",
+                params,
+            )
+            if cursor.rowcount == 0:
+                raise LedgerError(f"协商 {negotiation_id} 不存在")
+        record = self.get_negotiation(negotiation_id)
+        assert record is not None
+        return record
+
+    def negotiation_stats(self, bot_id: Optional[str] = None) -> Dict[str, Any]:
+        clauses: List[str] = []
+        params: List[Any] = []
+        if bot_id is not None:
+            clauses.append("bot_id = ?")
+            params.append(bot_id)
+        where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+        with self._lock:
+            rows = _rows(
+                self.conn.execute(
+                    f"SELECT status, COUNT(*) AS total, AVG(round) AS rounds "
+                    f"FROM a2a_negotiations {where}GROUP BY status",
+                    params,
+                )
+            )
+        stats: Dict[str, Any] = {"total": 0, "avg_rounds": 0.0}
+        rounds, rounds_seen = 0.0, 0
+        for row in rows:
+            total = int(row["total"])
+            stats[str(row["status"])] = total
+            stats["total"] += total
+            if row["rounds"] is not None:
+                rounds += float(row["rounds"]) * total
+                rounds_seen += total
+        if rounds_seen:
+            stats["avg_rounds"] = round(rounds / rounds_seen, 2)
+        return stats
+
+    # ------------------------------------------------------------ guest links
+    def create_guest_link(
+        self,
+        bot_id: str,
+        token: str,
+        *,
+        link_id: Optional[str] = None,
+        label: str = "",
+        topic: str = "",
+        max_uses: int = 1,
+        duration_minutes: int = 60,
+        timezone: str = "",
+        expires_at: float = 0.0,
+        created_by: str = "",
+    ) -> Dict[str, Any]:
+        if not token:
+            raise LedgerError("访客链接缺少 token")
+        if not 1 <= int(max_uses) <= 1000:
+            raise LedgerError("访客链接可用次数必须在 1–1000 之间")
+        identifier = link_id or new_guest_link_id()
+        if not _ID_RE.match(identifier):
+            raise LedgerError(f"访客链接 id 非法：{identifier!r}")
+        with self._lock:
+            try:
+                self.conn.execute(
+                    """
+                    INSERT INTO guest_links (link_id, bot_id, token, label, topic, status, max_uses, uses,
+                        duration_minutes, timezone, proposal_id, created_at, created_by, expires_at,
+                        last_used_at, revoked_at)
+                    VALUES (?, ?, ?, ?, ?, 'active', ?, 0, ?, ?, '', ?, ?, ?, 0, 0)
+                    """,
+                    (
+                        identifier,
+                        bot_id,
+                        token,
+                        label,
+                        topic,
+                        int(max_uses),
+                        int(duration_minutes),
+                        timezone,
+                        time.time(),
+                        created_by,
+                        float(expires_at),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:  # token/link_id 撞 UNIQUE：重复签发
+                raise LedgerError(f"创建访客链接失败：{exc}") from exc
+        record = self.get_guest_link(identifier)
+        assert record is not None
+        return record
+
+    def get_guest_link(self, link_id: str = "", *, token: str = "") -> Optional[Dict[str, Any]]:
+        if link_id:
+            sql, params = "SELECT * FROM guest_links WHERE link_id = ?", (link_id,)
+        elif token:
+            sql, params = "SELECT * FROM guest_links WHERE token = ?", (token,)
+        else:
+            return None
+        with self._lock:
+            row = self.conn.execute(sql, params).fetchone()
+        return dict(row) if row else None
+
+    def list_guest_links(
+        self,
+        bot_id: Optional[str] = None,
+        *,
+        status: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        limit = max(1, min(int(limit), 500))
+        clauses: List[str] = []
+        params: List[Any] = []
+        if bot_id is not None:
+            clauses.append("bot_id = ?")
+            params.append(bot_id)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+        params.append(limit)
+        with self._lock:
+            rows = _rows(
+                self.conn.execute(
+                    f"SELECT * FROM guest_links {where}ORDER BY created_at DESC LIMIT ?", params
+                )
+            )
+        return rows
+
+    def record_guest_use(self, link_id: str, *, visitor_hash: str = "") -> Optional[Dict[str, Any]]:
+        """Count one visit and flip the link to ``exhausted`` once its budget is spent."""
+        with self._lock:
+            self.conn.execute(
+                """
+                UPDATE guest_links
+                SET uses = uses + 1, last_used_at = ?,
+                    status = CASE WHEN uses + 1 >= max_uses AND status = 'active'
+                                  THEN 'exhausted' ELSE status END
+                WHERE link_id = ? AND status IN ('active','exhausted')
+                """,
+                (time.time(), link_id),
+            )
+        return self.get_guest_link(link_id)
+
+    def revoke_guest_link(self, link_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            self.conn.execute(
+                "UPDATE guest_links SET status = 'revoked', revoked_at = ? WHERE link_id = ?",
+                (time.time(), link_id),
+            )
+        return self.get_guest_link(link_id)
+
+    def mark_guest_links_expired(self, *, now: Optional[float] = None) -> int:
+        moment = time.time() if now is None else float(now)
+        with self._lock:
+            cursor = self.conn.execute(
+                "UPDATE guest_links SET status = 'expired' WHERE status = 'active' "
+                "AND expires_at > 0 AND expires_at <= ?",
+                (moment,),
+            )
+        return int(cursor.rowcount or 0)
+
+    def link_stats(self, bot_id: Optional[str] = None) -> Dict[str, Any]:
+        clauses: List[str] = []
+        params: List[Any] = []
+        if bot_id is not None:
+            clauses.append("bot_id = ?")
+            params.append(bot_id)
+        where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+        with self._lock:
+            rows = _rows(
+                self.conn.execute(
+                    f"SELECT status, COUNT(*) AS total, COALESCE(SUM(uses), 0) AS uses "
+                    f"FROM guest_links {where}GROUP BY status",
+                    params,
+                )
+            )
+        stats: Dict[str, Any] = {"total": 0, "visits": 0}
+        for row in rows:
+            stats[str(row["status"])] = int(row["total"])
+            stats["total"] += int(row["total"])
+            stats["visits"] += int(row["uses"])
+        return stats
+
+    def set_link_proposal(self, link_id: str, proposal_id: str) -> None:
+        with self._lock:
+            self.conn.execute(
+                "UPDATE guest_links SET proposal_id = ? WHERE link_id = ?",
+                (proposal_id, link_id),
+            )
+
+    def append_guest_message(
+        self,
+        bot_id: str,
+        link_id: str,
+        role: str,
+        text: str,
+        *,
+        proposal_id: str = "",
+        status: str = "ok",
+        visitor_hash: str = "",
+    ) -> int:
+        if role not in GUEST_ROLES:
+            raise LedgerError(f"非法访客会话角色 {role!r}")
+        with self._lock:
+            cursor = self.conn.execute(
+                """
+                INSERT INTO guest_messages (bot_id, link_id, role, text, proposal_id, status,
+                    visitor_hash, ts)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (bot_id, link_id, role, text[:2000], proposal_id, status, visitor_hash, time.time()),
+            )
+        return int(cursor.lastrowid or 0)
+
+    def list_guest_messages(self, link_id: str, *, limit: int = 200) -> List[Dict[str, Any]]:
+        limit = max(1, min(int(limit), 500))
+        with self._lock:
+            rows = _rows(
+                self.conn.execute(
+                    "SELECT * FROM (SELECT * FROM guest_messages WHERE link_id = ? "
+                    "ORDER BY ts DESC LIMIT ?) ORDER BY ts ASC",
+                    (link_id, limit),
+                )
+            )
+        return rows
+
+    # ---------------------------------------------------------- negotiation log
+    def log_negotiation(
+        self,
+        stage: str,
+        event: str,
+        *,
+        bot_id: str = "",
+        level: str = "info",
+        proposal_id: str = "",
+        negotiation_id: str = "",
+        link_id: str = "",
+        chat_ref: str = "",
+        detail: str = "",
+        data: Optional[Dict[str, Any]] = None,
+        latency_ms: float = 0.0,
+    ) -> int:
+        if stage not in AUDIT_STAGES:
+            raise LedgerError(f"非法审计阶段 {stage!r}")
+        if level not in AUDIT_LEVELS:
+            raise LedgerError(f"非法审计级别 {level!r}")
+        with self._lock:
+            cursor = self.conn.execute(
+                """
+                INSERT INTO negotiation_audit (bot_id, stage, event, level, proposal_id, negotiation_id,
+                    link_id, chat_ref, detail, data, latency_ms, ts)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    bot_id or "",
+                    stage,
+                    event,
+                    level,
+                    proposal_id,
+                    negotiation_id,
+                    link_id,
+                    chat_ref,
+                    detail[:500],
+                    _json_dump(data or {}, label="审计数据"),
+                    float(latency_ms),
+                    time.time(),
+                ),
+            )
+        return int(cursor.lastrowid or 0)
+
+    def recent_negotiations(
+        self,
+        bot_id: Optional[str] = None,
+        *,
+        limit: int = 100,
+        stage: Optional[str] = None,
+        level: Optional[str] = None,
+        proposal_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        limit = max(1, min(int(limit), 1000))
+        clauses: List[str] = []
+        params: List[Any] = []
+        if bot_id is not None:
+            clauses.append("bot_id = ?")
+            params.append(bot_id)
+        if stage is not None:
+            clauses.append("stage = ?")
+            params.append(stage)
+        if level is not None:
+            clauses.append("level = ?")
+            params.append(level)
+        if proposal_id is not None:
+            clauses.append("proposal_id = ?")
+            params.append(proposal_id)
+        where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+        params.append(limit)
+        with self._lock:
+            rows = _rows(
+                self.conn.execute(
+                    f"SELECT * FROM negotiation_audit {where}ORDER BY ts DESC LIMIT ?", params
+                )
+            )
+        for row in rows:
+            row["data"] = _json_load(row.get("data"), {})
+        return rows
+
+    def negotiation_funnel(self, bot_id: Optional[str] = None) -> Dict[str, Any]:
+        clauses: List[str] = []
+        params: List[Any] = []
+        if bot_id is not None:
+            clauses.append("bot_id = ?")
+            params.append(bot_id)
+        where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+        error_clauses = [*clauses, "level = 'error'"]
+        with self._lock:
+            by_stage = _rows(
+                self.conn.execute(
+                    f"SELECT stage, COUNT(*) AS total FROM negotiation_audit {where}"
+                    "GROUP BY stage ORDER BY stage",
+                    params,
+                )
+            )
+            errors = _rows(
+                self.conn.execute(
+                    "SELECT stage, COUNT(*) AS total FROM negotiation_audit "
+                    f"WHERE {' AND '.join(error_clauses)} GROUP BY stage",
+                    params,
+                )
+            )
+        return {
+            "stages": {str(row["stage"]): int(row["total"]) for row in by_stage},
+            "errors": {str(row["stage"]): int(row["total"]) for row in errors},
+        }
+
+    # ---------------------------------------------------------- calendar cache
+    def cache_busy(
+        self,
+        bot_id: str,
+        day: str,
+        busy: Sequence[Dict[str, Any]],
+        *,
+        timezone: str = "",
+        source: str = "mac_node",
+        ttl_seconds: float = 900.0,
+    ) -> None:
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", str(day)):
+            raise LedgerError(f"忙闲缓存日期非法：{day!r}")
+        try:
+            date.fromisoformat(str(day))
+        except ValueError as exc:
+            raise LedgerError(f"忙闲缓存日期非法：{day!r}") from exc
+        now = time.time()
+        payload = _json_dump([dict(item) for item in busy], label="忙闲区间")
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO calendar_cache (bot_id, day, timezone, busy, source, fetched_at, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (bot_id, day, source) DO UPDATE SET
+                    timezone = excluded.timezone,
+                    busy = excluded.busy,
+                    fetched_at = excluded.fetched_at,
+                    expires_at = excluded.expires_at
+                """,
+                (bot_id, day, timezone, payload, source, now, now + max(1.0, float(ttl_seconds))),
+            )
+
+    def cached_busy(
+        self,
+        bot_id: str,
+        day: str,
+        *,
+        source: str = "mac_node",
+        now: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
+        moment = time.time() if now is None else float(now)
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM calendar_cache WHERE bot_id = ? AND day = ? AND source = ?",
+                (bot_id, day, source),
+            ).fetchone()
+        if not row:
+            return None
+        record = dict(row)
+        if float(record["expires_at"]) <= moment:
+            return None
+        record["busy"] = _json_load(record["busy"], [])
+        return record
+
+    def purge_calendar_cache(self, *, now: Optional[float] = None) -> int:
+        moment = time.time() if now is None else float(now)
+        with self._lock:
+            cursor = self.conn.execute(
+                "DELETE FROM calendar_cache WHERE expires_at <= ?", (moment,)
+            )
+        return int(cursor.rowcount or 0)
+
+    # ------------------------------------------------------------- agent total
+    def agent_snapshot(self, bot_id: Optional[str] = None) -> Dict[str, Any]:
+        """One aggregated view for the console: proposals, negotiations, links, audit."""
+        return {
+            "proposals": self.proposal_stats(bot_id),
+            "negotiations": self.negotiation_stats(bot_id),
+            "guest_links": self.link_stats(bot_id),
+            "funnel": self.negotiation_funnel(bot_id),
+            "recent": self.recent_negotiations(bot_id, limit=20),
+        }
+
+
+def _proposal_record(row: Any) -> Dict[str, Any]:
+    record = dict(row)
+    record["payload"] = _json_load(record.get("payload"), {})
+    return record
+
+
+def _negotiation_record(row: Any) -> Dict[str, Any]:
+    record = dict(row)
+    record["owner_slots"] = _json_load(record.get("owner_slots"), [])
+    record["peer_slots"] = _json_load(record.get("peer_slots"), [])
+    record["intersection"] = _json_load(record.get("intersection"), [])
+    record["agreed_slot"] = _json_load(record.get("agreed_slot"), {})
+    return record
 
 
 def connect(settings_db_path: Path | str, *, target_version: int = SCHEMA_VERSION) -> Database:

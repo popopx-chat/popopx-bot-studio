@@ -194,6 +194,7 @@ def cmd_send_message(
     quoted_item_id: Optional[int] = None,
     live: bool = False,
     ttl: Optional[int] = None,
+    file_path: str = "",
 ) -> str:
     """``/_send`` with the ``json`` payload form.
 
@@ -206,6 +207,10 @@ def cmd_send_message(
             raise WebSocketProtocolError("发送内容不能为空")
         content = {"type": "text", "text": text}
     message: Dict[str, Any] = {"msgContent": content}
+    if file_path:
+        # ``ComposedMessage`` 的顶层可选 ``filePath``（Controller.hs ``v .:? "filePath"``）：
+        # CLI 直接把本地文件作为 ``{"type":"file"}`` 发出去，Studio 不需要额外的文件通道。
+        message["filePath"] = str(file_path)
     if quoted_item_id is not None:
         message["quotedItemId"] = int(quoted_item_id)
     flags = " live=on" if live else ""
@@ -871,10 +876,22 @@ class CLIWebSocketClient:
         return normalize_new_chat_items(payload) if payload.get("type") == "newChatItems" else []
 
     async def send_content(
-        self, chat_type: str, chat_id: int, content: Dict[str, Any], *, quoted_item_id: Optional[int] = None
+        self,
+        chat_type: str,
+        chat_id: int,
+        content: Dict[str, Any],
+        *,
+        quoted_item_id: Optional[int] = None,
+        file_path: str = "",
     ) -> Dict[str, Any]:
         return await self.request(
-            cmd_send_message(chat_type, chat_id, content=content, quoted_item_id=quoted_item_id)
+            cmd_send_message(
+                chat_type,
+                chat_id,
+                content=content,
+                quoted_item_id=quoted_item_id,
+                file_path=file_path,
+            )
         )
 
     async def list_contacts(self, user_id: int) -> List[Dict[str, Any]]:

@@ -1,0 +1,48 @@
+{
+  "asset": "needle3.cact",
+  "purpose": "POPOPX Bot Studio 的 24/7 替身机器人端侧工具调用模型权重，随仓库内置，运行期不做任何外网下载。",
+  "source": {
+    "vendor": "Cactus Compute",
+    "org": "Cactus-Compute",
+    "repository": "needle3",
+    "revision": "c95d25b4efa1e9601e785d92438e4ade0dbddbf8",
+    "resolve_base": "https://huggingface.co/Cactus-Compute/needle3/resolve/main/",
+    "api": "https://huggingface.co/api/models/Cactus-Compute/needle3?blobs=true",
+    "retrieved_at": "2026-11-26"
+  },
+  "license": {
+    "spdx": "Apache-2.0",
+    "text_file": "LICENSE-needle3.txt",
+    "text_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "attribution": "Needle 3 weights (c) Cactus Compute, Apache License 2.0. Not authored or endorsed by the POPOPX project."
+  },
+  "model": {
+    "format": "cact",
+    "engine_version": "3.1.0",
+    "architecture": "NeedleForToolCalling",
+    "total_parameters": 121021910,
+    "num_hidden_layers": 20,
+    "quantization_scheme": "embedding=4,mhc=4,default=2",
+    "runtime": "self-contained C++ / WebAssembly via the cactus-compute Python package"
+  },
+  "files": {
+    "needle3.cact": {
+      "bytes": 35335380,
+      "sha256": "c9d915eca282ed42d1a09b143b592adb4cc6744ffe2d294adf5cfc5548170c38"
+    },
+    "LICENSE-needle3.txt": {
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    "README-needle3.md": {
+      "bytes": 1527,
+      "sha256": "2b4f7c08acdcb152786dfc59c4c2468d0b6945e974eb60a7b68c240ff8250682"
+    },
+    "config-needle3.json": {
+      "bytes": 1273,
+      "sha256": "d65e8e076d42b26ed473313e4890dfd8397274a238fd6c1715fff539b464c04e"
+    }
+  },
+  "verify": "python3 official_tools/verify_needle_assets.py",
+  "refresh": "重新抓取需人工执行 curl -SL https://huggingface.co/Cactus-Compute/needle3/resolve/main/<file>，把 sha256 与 bytes 写回本清单，再运行校验器。"
+}

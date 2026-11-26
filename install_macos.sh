@@ -215,6 +215,53 @@ check_layout() {
   [ "$PROBLEMS" -eq 0 ] || die "仓库布局不完整（见 FAIL 行）" 1
 }
 
+# --------------------------------------------- 内置 Needle 3 权重的 SHA-256 完整性门禁
+NEEDLE_DIR_REL="studio/assets/models"
+NEEDLE_WEIGHT_MAX=$((50 * 1024 * 1024))
+
+needle_python() {
+  # 校验器只用标准库，venv 未就绪时也要能跑，否则装到一半就卡在权重检查上。
+  if [ -x "$VENV_PY" ]; then printf '%s\n' "$VENV_PY"; else printf '%s\n' "$PYTHON_BIN"; fi
+}
+
+verify_needle_weights() {
+  local dir="$REPO_DIR/$NEEDLE_DIR_REL"
+  local manifest="$dir/needle3.manifest.json"
+  local weight="$dir/needle3.cact"
+  local verifier="$REPO_DIR/official_tools/verify_needle_assets.py"
+
+  log "校验内置 Needle 3 权重（SHA-256，离线只读）"
+  [ -f "$manifest" ] || problem "缺少 ${manifest}：运行期无法校验权重完整性"
+  [ -f "$weight" ] || problem "缺少 ${weight}：裁定要求权重随仓库内置，零外网下载"
+  [ -f "$dir/LICENSE-needle3.txt" ] || problem "缺少 Needle 3 许可文本 ${dir}/LICENSE-needle3.txt"
+  [ -f "$verifier" ] || problem "缺少校验器 ${verifier}"
+  [ "$PROBLEMS" -eq 0 ] || return 1
+
+  local size
+  size=$(stat -f '%z' "$weight" 2>/dev/null || echo 0)
+  case "$size" in ('' | *[!0-9]) size=0 ;; esac
+  if [ "$size" -gt "$NEEDLE_WEIGHT_MAX" ]; then
+    problem "内置权重 ${size} 字节超过裁定上限 ${NEEDLE_WEIGHT_MAX}（<50MB）"
+    return 1
+  fi
+  local py
+  py="$(needle_python)"
+  if [ ! -x "$py" ] && ! have "$py"; then
+    note "无可用 python，跳过 SHA-256 复核（文件存在性与字节数已检查）"
+    return 0
+  fi
+  local out rc=0
+  out="$("$py" "$verifier" --dir "$dir" 2>&1)" || rc=$?
+  if [ "$VERBOSE" -eq 1 ]; then printf '%s\n' "$out" | sed 's/^/      | /'; fi
+  if [ "$rc" -ne 0 ]; then
+    printf '%s\n' "$out" | grep -E 'FAIL|结论|清单|缺少' | head -5 >&2
+    problem "内置权重未通过 SHA-256 校验（退出码 ${rc}）：请重新内置 needle3.cact，勿手改清单"
+    return 1
+  fi
+  log "内置权重就绪：${weight}（${size} 字节）—— 启动即可用，无需下载模型"
+  return 0
+}
+
 detect_python() {
   if [ -n "$PYTHON_BIN" ]; then
     { have "$PYTHON_BIN" || [ -x "$PYTHON_BIN" ]; } || die "--python 不可执行：$PYTHON_BIN" 1
@@ -708,6 +755,7 @@ check_mode() {
   log "只诊断模式（不改动任何内容）"
   check_layout
   detect_python
+  verify_needle_weights || true
   if venv_ready; then
     log "venv：${VENV_PY}（$("$VENV_PY" -V 2>&1)）"
     if deps_present "$VENV_PY"; then log "requirements.txt 依赖齐备"; else note "依赖不全：$DEPS"; fi
@@ -768,6 +816,7 @@ main() {
 
   check_layout
   detect_python
+  verify_needle_weights || die "内置 Needle 3 权重不可用，终止安装（见 FAIL 行）" 1
   if [ "$LAN" -eq 1 ]; then
     warn "--lan：将绑定 0.0.0.0 并置 STUDIO_ALLOW_LAN=1 —— 管理后台与 Open API 会暴露到局域网，"
     warn "      请叠加反向代理 + TLS + 防火墙。Bot 控制端口（5230..5299）仍只绑 127.0.0.1。"

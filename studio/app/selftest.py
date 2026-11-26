@@ -19,6 +19,7 @@ import io
 import json
 import os
 import re
+import secrets
 import shutil
 import socket
 import stat
@@ -29,6 +30,9 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from .agent_admin import ADMIN_PREFIX as AGENT_API_PREFIX
+from .agent_preferences import PREFERENCES_FILENAME
+from .agent_runtime import TOOL_NAMES, AgentRuntime, build_sender, wire_identity
 from .bot_supervisor import (
     BotSupervisor,
     BotSupervisorError,
@@ -54,6 +58,7 @@ from .bot_supervisor import (
 from .config import (
     DEFAULT_CLI_BIN_PATH,
     DEFAULT_HOST,
+    DEFAULT_MAC_NODE_URL,
     DEFAULT_PORT,
     SECURE_DIR_MODE,
     SECURE_FILE_MODE,
@@ -67,6 +72,8 @@ from .config import (
     permission_warnings,
 )
 from .database import (
+    AUDIT_LEVELS,
+    AUDIT_STAGES,
     BOT_FIELDS,
     SCHEMA_VERSION,
     TRIGGER_TYPES,
@@ -75,8 +82,60 @@ from .database import (
     connect,
     new_bot_id,
     new_bot_token,
+    new_guest_link_id,
+    new_negotiation_id,
+    new_proposal_id,
+)
+from .eco_cards import (
+    CALLBACK_ALT,
+    CALLBACK_APPROVE,
+    CALLBACK_DECLINE,
+    CALLBACK_KINDS,
+    CALLBACK_PREFIX,
+    ECO_MARKER,
+    REFERENCE_PREFIX,
+    SSO_SCAN_PREFIX,
+    UPLINK_PREFIXES,
+    EcoLimits,
+    EcoCardError,
+    build_action,
+    build_card,
+    callback_for,
+    callback_payload,
+    compact_json,
+    confirmation_card,
+    decode_message,
+    encode_frame,
+    escape_whitespace,
+    frame_service_card,
+    is_uplink_text,
+    new_card_id,
+    now_ms,
+    parse_callback,
+    status_card,
 )
 from .gateway import MAX_UPDATES, BotGateway, ProcessResult, UpdateBuffer
+from .guest_portal import LINK_PATH_PREFIX, TOKEN_MASK, TOKEN_MASK_CHARS
+from .ics import (
+    MAX_OCTETS as ics_MAX_OCTETS,
+    build_calendar,
+    build_event,
+    escape_text,
+    event_uid as ics_event_uid,
+    fold as ics_fold,
+    ics_filename,
+    stamp as ics_stamp,
+)
+
+
+def _utf8_ok(piece: str) -> bool:
+    """断言辅助：一个物理行必须是完整 UTF-8（折叠不能切断多字节字符）。"""
+    try:
+        piece.encode("utf-8").decode("utf-8")
+    except UnicodeError:
+        return False
+    return True
+
 from .i18n import (
     CATALOGS,
     FALLBACK_LOCALE,
@@ -102,6 +161,15 @@ from .i18n import (
     t as i18n_t,
     welcome_template,
 )
+from .mac_node_bridge import (
+    ACTION_AVAILABILITY,
+    ACTION_PROPOSALS,
+    COMMAND_PREFIX,
+    HEALTH_PATH,
+    MAX_SIGNAL_PAYLOAD_CHARACTERS,
+    SNAPSHOT_PATH,
+    TOKEN_HEADER,
+)
 from .main import (
     API_PREFIX,
     APP_NAME,
@@ -124,6 +192,15 @@ from .main import (
     request_token,
     safe_webhook_url,
     token_ok,
+)
+from .needle3_runtime import ENGINE_FALLBACK, ENGINE_NEEDLE
+from .needle_assets import (
+    MAX_WEIGHT_BYTES as NEEDLE_MAX_WEIGHT_BYTES,
+    WEIGHT_FILE as NEEDLE_WEIGHT_FILE,
+    NeedleAssetError,
+    ensure_weights,
+    load_manifest,
+    verify_assets,
 )
 from .open_api import (
     MAX_TEXT_LENGTH,
@@ -1871,8 +1948,8 @@ async def _plugin_roundtrip(plugins: PluginManager, gateway: BotGateway, bot_id:
 
 
 # --------------------------------------------------------------------------- 9
-BUNDLED_PLUGINS = ("webhook_relay.py", "msg_router.py", "auto_reply.py", "llm_bridge.py")
-BUNDLED_IDS = ("auto_reply", "llm_bridge", "msg_router", "webhook_relay")
+BUNDLED_PLUGINS = ("webhook_relay.py", "msg_router.py", "auto_reply.py", "llm_bridge.py", "personal_agent.py")
+BUNDLED_IDS = ("auto_reply", "llm_bridge", "msg_router", "personal_agent", "webhook_relay")
 ROUTER_PLUGIN_CONFIG = {
     "routes": [{
         "name": "售后", "keywords": ["退款"], "mode": "contains", "source": "direct",
@@ -1900,10 +1977,11 @@ class RecordingServices:
         return {"delivered": 1}
 
     async def send_content(
-        self, bot_id: str, chat_type: str, chat_id: str, content: Dict[str, Any], *, plugin_id: str = ""
+        self, bot_id: str, chat_type: str, chat_id: str, content: Dict[str, Any], *,
+        plugin_id: str = "", file_path: str = "",
     ) -> Dict[str, Any]:
-        self.sends.append({"chat_type": chat_type, "chat_id": chat_id, "content": content,
-                           "plugin_id": plugin_id})
+        self.sends.append({"bot_id": bot_id, "chat_type": chat_type, "chat_id": chat_id,
+                           "content": content, "plugin_id": plugin_id, "file_path": file_path})
         return {"delivered": 1}
 
     def log_message(self, bot_id: str, direction: str, **kwargs: Any) -> int:
@@ -1951,7 +2029,7 @@ def _handled(
 
 
 def group_plugins(test: SelfTest, h: Harness) -> None:
-    """The four shipped plugins: metadata contract, inert default, real behaviour."""
+    """内置插件：元数据契约、默认惰性、真实行为（含替身机器人 personal_agent）。"""
     t = test
     plugins_dir = ROOT / "plugins"
     t.check("插件目录存在", plugins_dir.is_dir(), str(plugins_dir))
@@ -1976,13 +2054,13 @@ def group_plugins(test: SelfTest, h: Harness) -> None:
                 all(str(field.get("label") or "").strip() for field in plugin.config_fields), str(keys))
         t.eq(f"{name} 默认配置与字段一一对应", set(keys), set(plugin.default_config))
         t.eq(f"{name} 默认开关为真、实例仍未启用", (plugin.default_config.get("enabled"), plugin.enabled), (True, False))
-    t.eq("四个内置插件 id", tuple(sorted(set(ids))), BUNDLED_IDS)
+    t.eq("内置插件 id 齐备", tuple(sorted(set(ids))), BUNDLED_IDS)
 
     db = h.database("plugins_real")
     bot = db.create_bot("plugprobe", 5380, display_name="内置插件")["id"]
     services = RecordingServices()
     mgr = PluginManager(db, services, plugins_dir=plugins_dir, tick_interval=5.0)
-    t.eq("四个插件全部就绪", sorted(h.async_run(mgr.load_async).values()), ["ready"] * 4)
+    t.eq("内置插件全部就绪", sorted(h.async_run(mgr.load_async).values()), ["ready"] * len(BUNDLED_IDS))
     t.eq("加载零失败", mgr.health()["failures"], {})
     t.eq("注册表清单", mgr.ids(), list(BUNDLED_IDS))
     t.eq("未启用时不参与派发", [p.plugin_id for p in mgr.ordered()], [])
@@ -2663,7 +2741,7 @@ def group_i18n(test: SelfTest, h: Harness) -> None:
     t.eq("目录只有后台与官网两套", sorted(CATALOGS), ["admin", "site"])
     t.eq("后台目录覆盖 18 语种", sorted(CATALOGS["admin"]), sorted(LOCALES))
     t.eq("官网目录覆盖 18 语种", sorted(CATALOGS["site"]), sorted(LOCALES))
-    t.eq("后台英文基准词条数", len(en_admin), 59)
+    t.eq("后台英文基准词条数", len(en_admin), 97)
     t.eq("官网英文基准词条数", len(en_site), 21)
     for locale in LOCALES:
         t.eq(f"{locale} 后台无缺失词条", missing_keys(locale, "admin"), [])
@@ -2819,7 +2897,7 @@ def group_web_live(test: SelfTest, h: Harness) -> None:
         api = API_PREFIX
         listed = c.get(f"{api}/plugins", headers=a).json()
         ids = sorted(p["plugin_id"] for p in listed["plugins"])
-        t.eq("托管启动后四个插件全部装载", ids, list(BUNDLED_IDS))
+        t.eq("托管启动后内置插件全部装载", ids, list(BUNDLED_IDS))
         field_keys = {p["plugin_id"]: [f["key"] for f in p["config_fields"]] for p in listed["plugins"]}
         t.check("插件配置字段随元数据下发", len(field_keys["webhook_relay"]) >= 3, str(field_keys))
         t.eq("未启用时 enabled 为假",
@@ -3772,9 +3850,19 @@ def group_install(test: SelfTest, h: Harness) -> None:
         for line in env_text.splitlines()
         if line.strip() and not line.lstrip().startswith("#") and "=" in line
     }
-    read_keys = {"STUDIO_HOST", "STUDIO_PORT", "STUDIO_ALLOW_LAN", "STUDIO_ADMIN_TOKEN",
-                 "STUDIO_DATA_DIR", "STUDIO_ENV_FILE", "CLI_BIN_PATH", "BOT_WS_PORT_BASE",
-                 "BOT_WS_PORT_MAX", "BOT_SMP_SERVERS", "STUDIO_LOCALE"}
+    # read_keys 从 config.py 源码里抠出来，而不是手抄一份清单：新增配置项时
+    # 只要 load_settings 真的读了它，门禁就会自动要求 .env.example 同步收录。
+    config_src = (REPO / "studio" / "app" / "config.py").read_text(encoding="utf-8")
+    read_keys: set[str] = set()
+    for pattern in (
+        r'os\.environ\.get\(\s*"([A-Z0-9_]+)"',
+        r'env\.get\(\s*"([A-Z0-9_]+)"',
+        r'_int_env\(\s*env,\s*"([A-Z0-9_]+)"',
+        r'_bool_env\(\s*env,\s*"([A-Z0-9_]+)"',
+        r'_float_env\(\s*env,\s*"([A-Z0-9_]+)"',
+    ):
+        read_keys.update(re.findall(pattern, config_src))
+    t.check("config.py 确实读取了配置项", len(read_keys) >= 20, f"只解析到 {len(read_keys)} 个键名")
     t.eq("模板键都被 config 读取", sorted(env_keys - read_keys), [])
     t.check("模板覆盖全部关键项", read_keys.issubset(env_keys), str(sorted(read_keys - env_keys)))
     t.contains("模板默认回环", env_text, "STUDIO_HOST=127.0.0.1")
@@ -3791,6 +3879,78 @@ def group_install(test: SelfTest, h: Harness) -> None:
     t.check("模板语种是受支持语种",
             example_locale is not None and is_supported(example_locale.group(1)),
             example_locale.group(0) if example_locale else "缺失")
+
+    # ------------------------------------------- 内置 Needle 3 权重（裁定：随仓库内置、加载前 SHA-256）
+    needle_dir = REPO / "studio" / "assets" / "models"
+    weight = needle_dir / NEEDLE_WEIGHT_FILE
+    t.check("内置权重目录存在", needle_dir.is_dir(), str(needle_dir))
+    t.check("权重文件已随仓库内置", weight.is_file(), "运行期不允许联网下载模型")
+    t.check("权重附带许可文本", (needle_dir / "LICENSE-needle3.txt").is_file(), "")
+    t.check("权重附带清单", (needle_dir / "needle3.manifest.json").is_file(), "")
+    if weight.is_file():
+        size = weight.stat().st_size
+        t.check("内置权重小于 50MB", size <= NEEDLE_MAX_WEIGHT_BYTES,
+                f"{size} > {NEEDLE_MAX_WEIGHT_BYTES}")
+        report = verify_assets(needle_dir)
+        t.eq("内置权重通过 SHA-256 校验", [r["name"] for r in report["checked"] if not r["ok"]], [])
+        t.eq("权重校验无错误项", report["errors"], [])
+        t.check("校验报告为通过", report["ok"], str(report["errors"]))
+        t.eq("清单钉住的权重字节数与磁盘一致", (report["weight_bytes"], Path(report["weight"]).stat().st_size),
+             (size, size))
+        t.check("校验报告带上游署名", bool(report["attribution"]), report["attribution"][:60])
+        manifest = load_manifest(needle_dir)
+        t.eq("清单 asset 指向权重文件", manifest.asset, NEEDLE_WEIGHT_FILE)
+        t.check("清单声明了来源仓库", bool(manifest.source.get("repository")), str(manifest.source))
+        t.check("清单声明了来源版本", bool(manifest.source.get("revision")), str(manifest.source))
+        t.check("清单声明了 SPDX 许可", bool(manifest.license.get("spdx")), str(manifest.license))
+        t.check("权重摘要在清单里被钉住", len(manifest.weights.sha256), 64)
+        t.eq("加载门禁 ensure_weights 通过", ensure_weights(needle_dir).name, NEEDLE_WEIGHT_FILE)
+
+    # 反向对照：摘要被改动的权重必须被门禁拒绝，否则上面的通过没有任何意义。
+    fake_dir = h.root / "needle-tampered"
+    fake_dir.mkdir(parents=True, exist_ok=True)
+    fake_blob = b"tampered-weights"
+    (fake_dir / NEEDLE_WEIGHT_FILE).write_bytes(fake_blob)
+    (fake_dir / "LICENSE-needle3.txt").write_text("Apache License 2.0", encoding="utf-8")
+    (fake_dir / "needle3.manifest.json").write_text(
+        json.dumps(
+            {
+                "asset": NEEDLE_WEIGHT_FILE,
+                "purpose": "selftest negative control",
+                "source": {"org": "Cactus-Compute", "repository": "needle3", "revision": "x"},
+                "license": {"spdx": "Apache-2.0", "text_file": "LICENSE-needle3.txt"},
+                "model": {"name": "needle3", "format": "cact"},
+                "files": {
+                    NEEDLE_WEIGHT_FILE: {"bytes": len(fake_blob), "sha256": "0" * 64},
+                    "LICENSE-needle3.txt": {"bytes": 17, "sha256": "1" * 64},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    tampered = verify_assets(fake_dir)
+    t.check("篡改后的权重校验报告失败", tampered["ok"] is False, str(tampered["errors"]))
+    t.check("篡改后的错误里有摘要不符", any("SHA-256" in e for e in tampered["errors"]),
+            str(tampered["errors"]))
+    t.raises("加载门禁拒绝篡改权重", NeedleAssetError, ensure_weights, fake_dir)
+    verifier = REPO / "official_tools" / "verify_needle_assets.py"
+    t.check("离线校验器随仓库交付", verifier.is_file(), str(verifier))
+    if verifier.is_file():
+        run_v = subprocess.run(
+            [sys.executable, str(verifier), "--dir", str(needle_dir), "--quiet"],
+            capture_output=True, text=True, timeout=120, check=False,
+        )
+        t.eq("校验器独立运行退出码为 0", run_v.returncode, 0)
+        t.check("校验器输出结论行", "结论" in run_v.stdout, run_v.stdout[-120:])
+    for path in (ubuntu, macos):
+        text = path.read_text(encoding="utf-8")
+        t.contains(f"{path.name} 定义权重门禁", text, "verify_needle_weights() {")
+        t.check(f"{path.name} 安装路径调用权重门禁",
+                re.search(r"verify_needle_weights[^\n]*\|\| die", text) is not None, "")
+        t.check(f"{path.name} 诊断路径调用权重门禁",
+                re.search(r"verify_needle_weights[^\n]*\|\| true", text) is not None, "")
+        t.contains(f"{path.name} 门禁核对文件名", text, NEEDLE_WEIGHT_FILE)
+        t.contains(f"{path.name} 门禁有体积上限", text, "NEEDLE_WEIGHT_MAX=")
 
     # ------------------------------------------------------ 零二进制捆绑与无桩
     binaries: List[str] = []
@@ -3831,7 +3991,7 @@ def group_install(test: SelfTest, h: Harness) -> None:
     t.contains("该处正是 StudioPlugin.on_message 基类钩子", stubs[0], "plugin_manager.py")
     plugins_dir = REPO / "studio" / "plugins"
     plugin_files = sorted(p.stem for p in plugins_dir.glob("*.py"))
-    t.eq("四个内置插件文件齐备", plugin_files, ["auto_reply", "llm_bridge", "msg_router", "webhook_relay"])
+    t.eq("内置插件文件齐备", plugin_files, sorted(name[:-3] for name in BUNDLED_PLUGINS))
     for module in plugin_files:
         source = (plugins_dir / f"{module}.py").read_text(encoding="utf-8")
         t.contains(f"{module} 覆写了 on_message", source, "async def on_message")
@@ -3845,9 +4005,1230 @@ def group_install(test: SelfTest, h: Harness) -> None:
         t.contains(f"{path.name} 有失败即停", text, "set -euo pipefail")
 
 
+def group_eco_cards(test: SelfTest, h: Harness) -> None:
+    """``::POPOPX_ECO::`` 卡片帧与 ``::CB::`` 回执：逐条对齐客户端解析器的规则。"""
+    t = test
+
+    t.eq("ECO 帧标记", ECO_MARKER, "::POPOPX_ECO::")
+    t.eq("回执前缀", CALLBACK_PREFIX, "::CB::")
+    t.eq("上行前缀集合", UPLINK_PREFIXES, ("::CB::", "::REF::", "::SSO_SCAN::"))
+
+    # ------------------------------------------------------------------ JSON 编码
+    t.eq("紧凑 JSON 不转义非 ASCII", compact_json({"a": "中 文"}), '{"a":"中 文"}')
+    t.eq("紧凑 JSON 无多余空格", compact_json({"a": 1, "b": [1, 2]}), '{"a":1,"b":[1,2]}')
+    t.eq("紧凑 JSON 把换行转义掉", compact_json({"a": "x\ny"}), '{"a":"x\\ny"}')
+    t.eq("编码结果永不含裸换行", any(ch in compact_json({"a": "x\r\ny"}) for ch in "\r\n"), False)
+    t.raises("紧凑 JSON 拒绝 NaN", EcoCardError, compact_json, {"a": float("nan")})
+    escaped = escape_whitespace('{"a":"x y"}')
+    t.eq("转义后不含裸空格", " " in escaped, False)
+    t.eq("转义写法是 \\u0020", escaped, '{"a":"x\\u0020y"}')
+    t.eq("转义后仍是合法 JSON", json.loads(escaped.replace("\\u0020", " ")), {"a": "x y"})
+
+    # ---------------------------------------------------------------------- 动作
+    ok_action = build_action(action_id="approve", title="确认", kind="callback",
+                             payload=f"{CALLBACK_APPROVE}_ppx1")
+    t.eq("callback 动作线上形状", sorted(ok_action), ["action", "id", "payload", "style", "title"])
+    t.raises("拒绝未知动作类型", EcoCardError, build_action, action_id="a", title="t", kind=" teleport")
+    t.raises("拒绝未知按钮样式", EcoCardError, build_action, action_id="a", title="t",
+             kind="callback", payload="p", style="neon")
+    t.raises("拒绝 action=none", EcoCardError, build_action, action_id="a", title="t", kind="none")
+    t.raises("拒绝含空白的 payload", EcoCardError, build_action, action_id="a", title="t",
+             kind="callback", payload="ppxok a b")
+    t.raises("拒绝含 :: 的 payload", EcoCardError, build_action, action_id="a", title="t",
+             kind="callback", payload="ppx::ok")
+    t.raises("拒绝超长 payload", EcoCardError, callback_payload, "x" * (EcoLimits.payload_chars + 1))
+    t.eq("接受绝对 URL", "url" in build_action(action_id="u", title="开", kind="open_url",
+                                               url="https://meet.popopx.im/a"), True)
+    t.raises("拒绝裸域名 URL", EcoCardError, build_action, action_id="u", title="开",
+             kind="open_url", url="meet.popopx.im")
+    t.raises("拒绝无主机的 URL", EcoCardError, build_action, action_id="u", title="开",
+             kind="open_url", url="https:///path")
+    t.raises("拒绝非 http 协议", EcoCardError, build_action, action_id="u", title="开",
+             kind="open_url", url="file:///etc/passwd")
+    t.eq("send_cmd 原样保留命令", build_action(action_id="s", title="命令", kind="send_cmd",
+                                               payload="/help")["payload"], "/help")
+
+    # ---------------------------------------------------------------------- 卡片
+    card = build_card("ppx_1", "标题", body="正文", fields=[{"label": "时间", "value": "10:00"}],
+                      actions=[ok_action], expires_at_ms=now_ms() + 60000)
+    t.eq("卡片必备短键齐备", [k for k in ("id", "v", "title", "ut") if k not in card], [])
+    t.eq("字段用 label/value 别名也能落地", card["fields"], [{"k": "时间", "v": "10:00"}])
+    t.check("过期时间写成 et", card["et"] > now_ms(), str(card.get("et")))
+    t.raises("拒绝未知卡片样式", EcoCardError, build_card, "i", "t", style="glass")
+    t.raises("拒绝超长标题", EcoCardError, build_card, "i", "标" * (EcoLimits.card_title_chars + 1))
+    t.raises("拒绝空标题", EcoCardError, build_card, "i", "   ")
+    t.raises("拒绝超长卡片 id", EcoCardError, build_card, "x" * 65, "t")
+    t.raises("拒绝超上限字段数", EcoCardError, build_card, "i", "t",
+             fields=[{"k": "a", "v": "b"}] * (EcoLimits.max_fields + 1))
+    t.raises("拒绝超上限按钮数", EcoCardError, build_card, "i", "t",
+             actions=[{"action_id": f"a{i}", "title": "t", "kind": "callback", "payload": f"p{i}"}
+                      for i in range(EcoLimits.max_actions + 1)])
+    t.raises("拒绝重复按钮 id", EcoCardError, build_card, "i", "t",
+             actions=[{"action_id": "a", "title": "1", "kind": "callback", "payload": "p1"},
+                      {"action_id": "a", "title": "2", "kind": "callback", "payload": "p2"}])
+
+    # ---------------------------------------------------------------------- 帧编码
+    t.raises("非卡片帧不能带可见文案", EcoCardError, encode_frame, {"t": "sh"}, visible_text="hi")
+    t.raises("更新帧不能带可见文案", EcoCardError, encode_frame,
+             {"t": "sc", "m": "u", "card": card}, visible_text="hi")
+    t.raises("拒绝未知帧类型", EcoCardError, encode_frame, {"t": "zz"})
+    oversized = build_card("i", "t")
+    oversized["body"] = "字" * 9000  # 绕过 build_card 自身的 2000 字符上限，专测整帧预算
+    t.raises("拒绝超预算的帧", EcoCardError, frame_service_card, oversized)
+
+    # ------------------------------------------------------------------ 确认卡片闭环
+    proposal = new_proposal_id()
+    created, message = confirmation_card(
+        proposal, title="替身机器人 · 会议确认", body="明天 10:00 与 A 开会",
+        fields=[{"k": "时间", "v": "2026-11-27 10:00"}, {"k": "时长", "v": "30 分钟"}],
+        decline_label="改期", alt_label="换一个时间",
+    )
+    t.eq("卡片 id 前缀", created["id"].startswith("ppxpr_"), True)
+    t.eq("确认卡片有三枚按钮", len(created["actions"]), 3)
+    t.eq("按钮动作依次是批准/拒绝/备选",
+         [a["id"] for a in created["actions"]], ["approve", "decline", "alternative"])
+    # 回执 payload 的形状是 <kind>_<proposal_id>，而提案 id 本身含下划线，
+    # 所以只能按第一个下划线切分——这正是 parse_callback 的做法。
+    t.eq("按钮回执前缀依次正确",
+         [a["payload"].partition("_")[0] for a in created["actions"]],
+         [CALLBACK_APPROVE, CALLBACK_DECLINE, CALLBACK_ALT])
+    t.eq("每条回执都带上提案 id",
+         {a["payload"].partition("_")[2] for a in created["actions"]}, {proposal})
+    t.eq("消息以标记帧结尾", message.splitlines()[-1].startswith(ECO_MARKER), True)
+    last_token = message.rsplit("\n", 1)[1]
+    t.eq("帧是单个空白 token（客户端从末尾回找）", " " in last_token, False)
+    t.eq("帧内不含换行", any(ch in last_token for ch in "\r\n"), False)
+    t.check("可见文案在帧之前", message.count(ECO_MARKER), 1)
+    t.eq("气泡文案不是帧本身", message.splitlines()[0], "明天 10:00 与 A 开会")
+    decoded = decode_message(message)
+    t.check("客户端规则能解回这张卡片", decoded is not None, message[:80])
+    if decoded:
+        t.eq("解出的帧类型", decoded["t"], "sc")
+        t.eq("解出的模式", decoded["mode"], "c")
+        t.eq("解出的卡片 id", decoded["card"]["id"], created["id"])
+        t.eq("解出的按钮数", len(decoded["card"]["actions"]), 3)
+    t.eq("回执可被解析回提案", parse_callback(f"{CALLBACK_PREFIX}{CALLBACK_APPROVE}_{proposal}"),
+         (CALLBACK_APPROVE, proposal))
+    for kind in CALLBACK_KINDS:
+        # 客户端发送时自带 ::CB:: 前缀，回执生成器只产出 payload 本体。
+        line = CALLBACK_PREFIX + callback_for(kind, proposal)
+        t.eq(f"{kind} 回执闭环", parse_callback(line), (kind, proposal))
+        t.eq(f"{kind} 回执行被识别为上行", is_uplink_text(line), True)
+    t.eq("账本提案 id 天然是合法回执引用",
+         parse_callback(CALLBACK_PREFIX + callback_for(CALLBACK_APPROVE, proposal)) is not None, True)
+    standalone = encode_frame({"t": "sh"})
+    t.eq("控制帧独占整条消息", standalone.startswith(ECO_MARKER) and " " not in standalone, True)
+    t.eq("独立控制帧也能被解出", decode_message(standalone)["t"], "sh")
+
+    # 客户端 parseControlText：标记之后含换行 → 整条不再被当作控制帧。
+    t.eq("标记后含换行则解析失败", decode_message(f"{ECO_MARKER}{{\"t\":\"sh\"}}\n尾巴"), None)
+    t.eq("无标记则不是 ECO 消息", decode_message("普通消息 ::POPOPX_ECO::"), None)
+    t.eq("标记后不是 JSON 则忽略", decode_message(f"{ECO_MARKER}not-json"), None)
+    t.eq("未知帧类型被忽略", decode_message(f"{ECO_MARKER}{{\"t\":\"zz\"}}"), None)
+    t.eq("非 ::CB:: 前缀不解析回执", parse_callback("ppxok_" + proposal), None)
+    t.eq("空 payload 不解析回执", parse_callback(f"{CALLBACK_PREFIX}"), None)
+    t.eq("含 :: 的 payload 不解析回执", parse_callback(f"{CALLBACK_PREFIX}ppxok::{proposal}"), None)
+    t.eq("含空白的 payload 不解析回执", parse_callback(f"{CALLBACK_PREFIX}ppxok_{proposal} x"), None)
+    t.eq("未知回执类型不解析", parse_callback(f"{CALLBACK_PREFIX}pay_{proposal}"), None)
+    t.eq("非法引用字符不解析", parse_callback(f"{CALLBACK_PREFIX}ppxok_a/b"), None)
+    t.eq("超长 payload 不解析", parse_callback(f"{CALLBACK_PREFIX}ppxok_{'x' * 600}"), None)
+    t.eq("非字符串不解析回执", parse_callback(None), None)
+
+    # ------------------------------------------------------------------ 就地更新卡片
+    update = status_card(created, title="已确认", body="已写入 Mac 日历")
+    t.eq("更新帧不带可见文案", "\n" in update, False)
+    upd = decode_message(update)
+    t.check("更新帧可解回", upd is not None, update[:80])
+    if upd:
+        t.eq("更新帧模式是 u", upd["mode"], "u")
+        t.eq("更新帧沿用同一张卡片 id", upd["card"]["id"], created["id"])
+        t.eq("更新帧标题", upd["card"]["title"], "已确认")
+        t.eq("更新帧不再带按钮", "actions" in upd["card"], False)
+
+    t.eq("回执行判定：回执", is_uplink_text(f"{CALLBACK_PREFIX}ppxok_{proposal}"), True)
+    t.eq("回执行判定：引用", is_uplink_text(f"{REFERENCE_PREFIX}abc"), True)
+    t.eq("回执行判定：扫码", is_uplink_text(f"{SSO_SCAN_PREFIX}abc"), True)
+    t.eq("回执行判定：普通消息", is_uplink_text("明天几点开会？"), False)
+    t.eq("回执行判定：空前缀", is_uplink_text(CALLBACK_PREFIX), False)
+    t.eq("回执行判定：含空白", is_uplink_text(f"{CALLBACK_PREFIX}a b"), False)
+    t.eq("回执行判定：含 ::", is_uplink_text(f"{CALLBACK_PREFIX}a::b"), False)
+    t.eq("回执行判定：非字符串", is_uplink_text(None), False)
+    t.check("卡片 id 生成器不重复", len({new_card_id() for _ in range(200)}) >= 199, "")
+
+
+def group_ics(test: SelfTest, h: Harness) -> None:
+    """RFC 5545 生成器：CRLF、75 字节折叠、TEXT 转义、UTC 时间戳。"""
+    t = test
+
+    t.eq("TEXT 转义反斜杠优先", escape_text("a\\b"), "a\\\\b")
+    t.eq("TEXT 转义分号与逗号", escape_text("a;b,c"), "a\\;b\\,c")
+    t.eq("TEXT 换行折成字面 \\n", escape_text("a\nb\r\nc"), "a\\nb\\nc")
+    t.eq("TEXT 空值安全", escape_text(None), "")
+    t.eq("文本值原样返回", escape_text("_plain"), "_plain")
+
+    short = "SUMMARY:简短"
+    t.eq("短行不折叠", ics_fold(short), short)
+    long_line = "DESCRIPTION:" + ("会议说明，含中文与标点;逗号," * 30)
+    folded = ics_fold(long_line)
+    t.check("折叠后含 CRLF 续行", "\r\n " in folded, folded[:40])
+    widths = [len(piece.encode("utf-8")) for piece in folded.split("\r\n")]
+    t.check("每个物理行不超过 75 字节", all(w <= ics_MAX_OCTETS for w in widths), str(widths[:6]))
+    t.check("续行以一个空格开头", all(p.startswith(" ") for p in folded.split("\r\n")[1:]), "")
+    t.eq("去折叠后与原文完全一致", folded.replace("\r\n ", ""), long_line)
+    cjk = "SUMMARY:" + ("中文" * 60)
+    cjk_folded = ics_fold(cjk)
+    for piece in cjk_folded.split("\r\n"):
+        t.check("折叠不切断多字节字符", _utf8_ok(piece), piece[:24])
+    t.eq("中文行去折叠无损", cjk_folded.replace("\r\n ", ""), cjk)
+
+    t.eq("epoch 0 的时间戳", ics_stamp(0), "19700101T000000Z")
+    t.eq("时间戳总是 UTC", ics_stamp(1_700_000_000).endswith("Z"), True)
+    t.eq("时间戳定长 16", len(ics_stamp(1_700_000_000)), 16)
+    uid = ics_event_uid("ppx", "pr_2026/11:27#1")
+    t.eq("UID 清洗非法字符", all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-"
+                               for c in uid.split("@")[0]), True)
+    t.contains("UID 固定域后缀", uid, "@bot-studio.popopx")
+    t.eq("UID 生成是幂等的", ics_event_uid("ppx", "ref-1"), ics_event_uid("ppx", "ref-1"))
+    t.eq("空 UID 前缀也有兜底", ics_event_uid("", ""), "popopx@bot-studio.popopx")
+
+    start = 1_800_000_000.0
+    event = build_event(uid=uid, summary="与 A 开会; 项目同步", start_ts=start, end_ts=start + 1800,
+                        description="替身机器人代订", location="线上", url="https://meet.popopx.im/x",
+                        categories=("POPOPX", "MEET"))
+    joined = "\n".join(event)
+    t.eq("事件以 BEGIN/END 包裹", (event[0], event[-1]), ("BEGIN:VEVENT", "END:VEVENT"))
+    for key in ("UID:", "DTSTAMP:", "DTSTART:", "DTEND:", "SUMMARY:", "STATUS:", "SEQUENCE:", "TRANSP:"):
+        t.contains(f"事件含 {key}", joined, key)
+    t.contains("起止时间是 UTC", joined, f"DTSTART:{ics_stamp(start)}")
+    t.eq("DTEND 比 DTSTART 晚半小时", f"DTEND:{ics_stamp(start + 1800)}" in event, True)
+    t.contains("SUMMARY 里的分号被转义", joined, "与 A 开会\\; 项目同步")
+    t.contains("URL 原样成行", joined, "URL:https://meet.popopx.im/x")
+    t.contains("分类逗号被转义", joined, "CATEGORIES:POPOPX\\,MEET")
+    t.eq("省略空的可选字段", any(line.startswith("LOCATION:") for line in build_event(
+        uid=uid, summary="s", start_ts=start, end_ts=start + 60)), False)
+    t.raises("拒绝结束早于开始", ValueError, build_event, uid=uid, summary="s",
+             start_ts=start, end_ts=start)
+    t.raises("拒绝非法状态", ValueError, build_event, uid=uid, summary="s", start_ts=start,
+             end_ts=start + 60, status="MAYBE")
+    t.raises("拒绝非法 METHOD", ValueError, build_calendar,
+             [{"uid": uid, "summary": "s", "start_ts": start, "end_ts": start + 60}], method="FORGE")
+
+    text = build_calendar(
+        [{"uid": uid, "summary": "会议", "start_ts": start, "end_ts": start + 1800},
+         {"uid": ics_event_uid("ppx", "second"), "summary": "第二次, 会议", "start_ts": start + 3600,
+          "end_ts": start + 4200, "status": "TENTATIVE"}],
+        method="PUBLISH", calendar_name="POPOPX 替身机器人", refresh_interval_minutes=15,
+    )
+    t.eq("日历以 CRLF 结束", text.endswith("\r\n"), True)
+    t.eq("日历内没有裸换行", "\n" in text.replace("\r\n", ""), False)
+    t.eq("没有孤立的 LF/CR", b"\n" in text.encode().replace(b"\r\n", b""), False)
+    lines = text.split("\r\n")
+    t.eq("日历头", lines[0], "BEGIN:VCALENDAR")
+    t.eq("日历尾", lines[-2], "END:VCALENDAR")
+    t.contains("VERSION 2.0", text, "VERSION:2.0")
+    t.contains("GREGORIAN 日历", text, "CALSCALE:GREGORIAN")
+    t.contains("PRODID 是本项目", text, "POPOPX")
+    t.contains("METHOD 写出", text, "METHOD:PUBLISH")
+    t.contains("X-WR-CALNAME", text, "POPOPX")
+    t.contains("刷新间隔成对出现", text, "X-PUBLISHED-TTL:PT15M")
+    t.contains("REFRESH-INTERVAL", text, "REFRESH-INTERVAL;VALUE=DURATION:PT15M")
+    t.eq("两个事件", text.count("BEGIN:VEVENT"), 2)
+    t.eq("事件配对闭合", text.count("BEGIN:VEVENT"), text.count("END:VEVENT"))
+    t.contains("第二个事件是 TENTATIVE", text, "STATUS:TENTATIVE")
+    physical = [p for p in text.split("\r\n")]
+    t.check("所有物理行 ≤75 字节", all(len(p.encode("utf-8")) <= ics_MAX_OCTETS for p in physical),
+            str([len(p.encode()) for p in physical if len(p.encode()) > ics_MAX_OCTETS][:3]))
+    t.eq("去折叠后仍能取回转义前的正文",
+         text.replace("\r\n ", "").count("DESCRIPTION:"), 0)
+    flat = text.replace("\r\n ", "")
+    t.eq("折叠不影响逻辑行计数", flat.count("BEGIN:VEVENT"), 2)
+
+    name = ics_filename("与 A 开会; 项目/同步", start)
+    t.contains("文件名带 .ics", name, ".ics")
+    t.eq("文件名不含路径分隔符", ("/" in name or "\\" in name), False)
+    t.contains("文件名带 UTC 日期", name, ics_stamp(start))
+    t.eq("非法字符被替换", any(c in name for c in "; /"), False)
+    t.eq("空标题也有兜底文件名", ics_filename("", start).startswith("popopx-meeting-"), True)
+
+
+AGENT_TABLES = (
+    "agent_proposals",
+    "a2a_negotiations",
+    "guest_links",
+    "guest_messages",
+    "negotiation_audit",
+    "calendar_cache",
+)
+
+
+def group_agent_ledger(test: SelfTest, h: Harness) -> None:
+    """账本 v5：替身提案、A2A 协商、访客链接、审计与忙闲缓存的迁移与约束。"""
+    t = test
+    db = h.database("agent_ledger")
+
+    t.eq("账本 schema 版本推进到 5", SCHEMA_VERSION, 5)
+    tables = {row["name"] for row in db.conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table'")}
+    t.eq("v5 的六张表全部建成", [x for x in AGENT_TABLES if x not in tables], [])
+    indexes = {row["name"] for row in db.conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'index' "
+        "AND (name LIKE 'idx_agent%' OR name LIKE 'idx_a2a%' OR name LIKE 'idx_guest%' "
+        "OR name LIKE 'idx_negot%' OR name LIKE 'idx_cal%')")}
+    t.check("v5 建了配套索引", len(indexes) >= 6, str(sorted(indexes)))
+    t.eq("重跑迁移不再应用任何版本", db.migrate(target_version=SCHEMA_VERSION), [])
+    t.eq("迁移台账记到 5",
+         [r["version"] for r in db.conn.execute(
+             "SELECT version FROM schema_migrations ORDER BY version")], [1, 2, 3, 4, 5])
+    again = {row["name"] for row in db.conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table'")}
+    t.eq("重跑迁移不会把表建两遍", sorted(again & set(AGENT_TABLES)), sorted(AGENT_TABLES))
+
+    # ---------------------------------------------------------------- 标识符
+    ids = [new_proposal_id() for _ in range(200)]
+    t.check("提案 id 唯一", len(set(ids)) == len(ids), "")
+    t.eq("提案 id 前缀", ids[0].startswith("pr_"), True)
+    t.eq("协商 id 前缀", new_negotiation_id().startswith("ng_"), True)
+    t.eq("访客链接 id 前缀", new_guest_link_id().startswith("gl_"), True)
+    t.check("提案 id 直接可当回执引用", parse_callback(
+        CALLBACK_PREFIX + callback_for(CALLBACK_APPROVE, ids[0])) is not None, True)
+
+    bot = db.create_bot("agentledger", 5455, display_name="替身账本")
+    other = db.create_bot("agentother", 5456)
+    bid = bot["id"]
+    obid = other["id"]
+    start = time.time()
+    peer = "ma_pQ7Zk2mVx3rN8sT1@smp1.popopx.im"  # 对端 SMP 身份（掩码后仍是这一串）
+
+    # ------------------------------------------------------------------ 提案
+    proposal = db.create_proposal(
+        bid, "create", source="a2a", chat_type="direct", chat_ref="a@smp",
+        counterparty="peer", timezone="Asia/Shanghai", start_ts=start + 3600,
+        end_ts=start + 5400, duration_minutes=30, summary="与 A 开会",
+        payload={"expires_at": start + 7200, "card_id": "ppxpr_x"},
+        link_id="", ticket_id="tk1",
+    )
+    t.eq("新提案默认 pending", proposal["status"], "pending")
+    t.eq("提案负载原样读回（dict 不是字符串）", proposal["payload"]["card_id"], "ppxpr_x")
+    t.eq("提案时长落库", proposal["duration_minutes"], 30)
+    t.eq("未显式给 id 也会生成", bool(proposal["proposal_id"]), True)
+    t.raises("拒绝非法动作", LedgerError, db.create_proposal, bid, "teleport")
+    t.raises("拒绝非法来源", LedgerError, lambda: db.create_proposal(
+        bid, "create", source="telegram"))
+    t.raises("拒绝非法提案 id", LedgerError, lambda: db.create_proposal(
+        bid, "create", proposal_id="bad id/../x"))
+    t.eq("未知提案读不到", db.get_proposal("pr_nope"), None)
+    t.eq("空 card_id 不去猜提案", db.find_proposal_by_card(""), None)
+    t.eq("刚建好还查不到卡片索引", db.find_proposal_by_card("ppxpr_card1"), None)
+
+    approved = db.update_proposal(proposal["proposal_id"], status="approved", card_id="ppxpr_card1")
+    t.eq("批准后状态改写", approved["status"], "approved")
+    t.check("终态自动补 decided_at", approved["decided_at"] > 0, str(approved["decided_at"]))
+    t.eq("按卡片 id 反查提案", db.find_proposal_by_card("ppxpr_card1")["proposal_id"],
+         proposal["proposal_id"])
+    t.raises("拒绝未知字段", LedgerError, db.update_proposal, proposal["proposal_id"], hacker="x")
+    t.raises("拒绝非法状态", LedgerError, db.update_proposal, proposal["proposal_id"], status="zombie")
+    t.raises("拒绝非对象负载", LedgerError, db.update_proposal, proposal["proposal_id"], payload="nope")
+    t.raises("拒绝改不存在的提案", LedgerError, db.update_proposal, "pr_nope", status="approved")
+    same = db.update_proposal(proposal["proposal_id"])
+    t.eq("空更新是读回而非报错", same["status"], "approved")
+
+    fresh = db.create_proposal(bid, "reschedule", payload={"expires_at": start + 99999})
+    gone = db.create_proposal(bid, "cancel", payload={"expires_at": start - 10})
+    stale = db.create_proposal(obid, "create", payload={})
+    db.conn.execute("UPDATE agent_proposals SET created_at = ? WHERE proposal_id = ?",
+                    (time.time() - 90000, stale["proposal_id"]))
+    expired = db.expire_proposals()
+    t.eq("过窗口的 pending 提案被过期化", db.get_proposal(gone["proposal_id"])["status"], "expired")
+    t.eq("超一天的 pending 提案也被过期化", db.get_proposal(stale["proposal_id"])["status"], "expired")
+    t.eq("未过窗口的提案不受影响", db.get_proposal(fresh["proposal_id"])["status"], "pending")
+    t.eq("已批准的提案不会被过期覆盖", db.get_proposal(proposal["proposal_id"])["status"], "approved")
+    t.check("过期计数至少覆盖两条", expired >= 2, str(expired))
+    t.eq("过期时间写进 decided_at", db.get_proposal(gone["proposal_id"])["decided_at"] > 0, True)
+
+    db.create_proposal(obid, "create", summary="另一台 Bot")
+    stats = db.proposal_stats(bid)
+    t.check("提案统计按状态汇总", stats["pending"] >= 1, str(stats["totals"]))
+    t.eq("统计里有动作×状态的细分", any(k.startswith("create:") for k in stats["breakdown"]), True)
+    t.check("按 Bot 过滤统计给出非零细分", sum(1 for v in stats["breakdown"].values() if v > 0) >= 2,
+            str(stats["breakdown"]))
+    t.eq("全量统计不小于单 Bot", db.proposal_stats()["totals"]["pending"] >= stats["totals"]["pending"], True)
+    listed = db.list_proposals(bid, status="approved")
+    t.eq("列表按状态过滤", {p["proposal_id"] for p in listed}, {proposal["proposal_id"]})
+    t.eq("列表 limit 生效", len(db.list_proposals(bid, limit=1)), 1)
+    t.eq("列表可按 bot 为空", db.list_proposals("nope_bot"), [])
+
+    # ------------------------------------------------------------------ 协商
+    slots = [{"start": start + 3600, "end": start + 5400, "tz": "Asia/Shanghai"}]
+    nego = db.create_negotiation(
+        bid, peer, peer_label="老张", channel="a2a", owner_timezone="Asia/Shanghai",
+        peer_timezone="Europe/Berlin", window_start=start, window_end=start + 86400,
+        duration_minutes=60, expires_at=start + 7200, owner_slots=slots,
+    )
+    t.eq("协商默认 open", nego["status"], "open")
+    t.eq("掩码候选槽原样读回", nego["owner_slots"], slots)
+    t.eq("空槽位读回是列表而不是空串", (nego["peer_slots"], nego["intersection"], nego["agreed_slot"]),
+         ([], [], {}))
+    t.eq("协商首轮 round 为 0", nego["round"], 0)
+    t.raises("拒绝非法通道", LedgerError, lambda: db.create_negotiation(bid, peer, channel="sms"))
+    t.eq("未知协商读不到", db.get_negotiation("ng_nope"), None)
+    found = db.find_open_negotiation(bid, peer)
+    t.check("能按对端找到进行中的协商", found is not None and found["negotiation_id"] == nego["negotiation_id"],
+            str(found))
+    t.eq("空对端不匹配任何协商", db.find_open_negotiation(bid, ""), None)
+    t.eq("别的 bot 找不到这条协商", db.find_open_negotiation(obid, peer), None)
+    past = db.create_negotiation(bid, "ma@expired.example", expires_at=time.time() - 5)
+    t.eq("已过期的 open 协商不再命中", db.find_open_negotiation(bid, "ma@expired.example"), None)
+    t.eq("未过期的 open 协商仍在窗口内命中",
+         db.find_open_negotiation(bid, peer)["negotiation_id"], nego["negotiation_id"])
+    db.update_negotiation(nego["negotiation_id"], round=3, peer_slots=slots,
+                          intersection=slots, agreed_slot=slots[0], status="converged",
+                          proposal_id=proposal["proposal_id"])
+    back = db.get_negotiation(nego["negotiation_id"])
+    t.eq("协商轮次可推进", back["round"], 3)
+    t.eq("交集与商定槽原样读回", (back["peer_slots"], back["intersection"], back["agreed_slot"]),
+         (slots, slots, slots[0]))
+    t.eq("收敛后不再是 open", db.find_open_negotiation(bid, peer), None)
+    t.raises("拒绝未知协商字段", LedgerError, db.update_negotiation, nego["negotiation_id"], x=1)
+    t.raises("拒绝非法协商状态", LedgerError, db.update_negotiation, nego["negotiation_id"], status="paused")
+    t.raises("拒绝改不存在的协商", LedgerError, db.update_negotiation, "ng_nope", round=1)
+    nstats = db.negotiation_stats(bid)
+    t.check("协商统计含总量", nstats["total"] >= 2, str(nstats))
+    t.check("协商统计给出平均轮次", isinstance(nstats["avg_rounds"], float), str(nstats["avg_rounds"]))
+    t.eq("按状态筛协商", {n["negotiation_id"] for n in db.list_negotiations(bid, status="converged")},
+         {nego["negotiation_id"]})
+
+    # ---------------------------------------------------------------- 访客链接
+    token = secrets.token_urlsafe(24)
+    link = db.create_guest_link(
+        bid, token, label="张三", topic="项目同步", max_uses=2, duration_minutes=45,
+        timezone="Asia/Shanghai", expires_at=start + 86400, created_by="console",
+    )
+    t.eq("新链接默认 active", link["status"], "active")
+    t.eq("新链接零使用", int(link["uses"]), 0)
+    t.eq("可按 token 反查链接", db.get_guest_link(token=token)["link_id"], link["link_id"])
+    t.eq("可按 link_id 正查", db.get_guest_link(link["link_id"])["token"], token)
+    t.eq("两个都不给不猜链接", db.get_guest_link(), None)
+    t.eq("陌生 token 查不到", db.get_guest_link(token="nope"), None)
+    t.raises("拒绝空 token", LedgerError, lambda: db.create_guest_link(bid, ""))
+    t.raises("拒绝零次可用", LedgerError, lambda: db.create_guest_link(bid, "tk", max_uses=0))
+    t.raises("拒绝超上限次数", LedgerError, lambda: db.create_guest_link(bid, "tk", max_uses=1001))
+    t.raises("拒绝非法链接 id", LedgerError, lambda: db.create_guest_link(bid, "tk2", link_id="a b"))
+    t.raises("拒绝重复 token", LedgerError, lambda: db.create_guest_link(bid, token))
+
+    used1 = db.record_guest_use(link["link_id"], visitor_hash="vh1")
+    t.eq("首次访问计数为 1", int(used1["uses"]), 1)
+    t.eq("首次访问仍是 active", used1["status"], "active")
+    t.eq("记录访客指纹", used1["last_used_at"] > 0, True)
+    used2 = db.record_guest_use(link["link_id"], visitor_hash="vh2")
+    t.eq("用完配额自动变 exhausted", used2["status"], "exhausted")
+    used3 = db.record_guest_use(link["link_id"])
+    t.eq("用尽后仍可计数（审计不丢）", int(used3["uses"]), 3)
+    t.eq("用尽后状态不回退", used3["status"], "exhausted")
+    single = db.create_guest_link(bid, secrets.token_urlsafe(12), max_uses=1)
+    t.eq("单次链接一次即尽", db.record_guest_use(single["link_id"])["status"], "exhausted")
+    rev = db.create_guest_link(bid, secrets.token_urlsafe(12))
+    revoked = db.revoke_guest_link(rev["link_id"])
+    t.eq("吊销后状态是 revoked", revoked["status"], "revoked")
+    t.check("吊销写下时间戳", revoked["revoked_at"] > 0, str(revoked["revoked_at"]))
+    after = db.record_guest_use(rev["link_id"])
+    t.eq("吊销的链接不再计数", int(after["uses"]), 0)
+    t.eq("吊销链接状态保持", after["status"], "revoked")
+    dead = db.create_guest_link(bid, secrets.token_urlsafe(12), expires_at=time.time() - 1)
+    live = db.create_guest_link(bid, secrets.token_urlsafe(12), expires_at=time.time() + 3600)
+    forever = db.create_guest_link(bid, secrets.token_urlsafe(12))
+    t.eq("过期扫描只动过期链接", db.mark_guest_links_expired() >= 1, True)
+    t.eq("过期链接状态改写", db.get_guest_link(dead["link_id"])["status"], "expired")
+    t.eq("未过期链接不受影响", db.get_guest_link(live["link_id"])["status"], "active")
+    t.eq("不设过期时间的链接永不过期", db.get_guest_link(forever["link_id"])["status"], "active")
+    db.set_link_proposal(link["link_id"], proposal["proposal_id"])
+    t.eq("链接可回写提案", db.get_guest_link(link["link_id"])["proposal_id"], proposal["proposal_id"])
+    lstats = db.link_stats(bid)
+    t.check("链接统计给出总量与访问量", lstats["total"] >= 6 and lstats["visits"] >= 3, str(lstats))
+    t.eq("可按状态筛链接", all(x["status"] == "exhausted" for x in db.list_guest_links(bid, status="exhausted")), True)
+    t.eq("链接归属该 bot", db.get_guest_link(forever["link_id"])["bot_id"], bid)
+    t.eq("别的 bot 列不到这条链接", [x["link_id"] for x in db.list_guest_links(obid)], [])
+
+    # -------------------------------------------------------------- 访客会话
+    mid = db.append_guest_message(bid, link["link_id"], "visitor", "我周三下午有空",
+                                 visitor_hash="vh1")
+    t.check("访客消息返回自增 id", mid > 0, str(mid))
+    db.append_guest_message(bid, link["link_id"], "bot", "为你找到两个候选时段")
+    db.append_guest_message(bid, link["link_id"], "owner", "确认", proposal_id=proposal["proposal_id"])
+    msgs = db.list_guest_messages(link["link_id"])
+    t.eq("会话按时间正序返回", [m["role"] for m in msgs], ["visitor", "bot", "owner"])
+    t.eq("会话带 bot 归属", {m["bot_id"] for m in msgs}, {bid})
+    t.eq("会话 limit 只截最近 N 条再正序", [m["role"] for m in db.list_guest_messages(link["link_id"], limit=2)],
+         ["bot", "owner"])
+    t.eq("别的链接读不到", db.list_guest_messages("gl_nope"), [])
+    t.raises("拒绝非法角色", LedgerError, db.append_guest_message, bid, link["link_id"], "stranger", "x")
+    long_id = db.append_guest_message(bid, link["link_id"], "visitor", "长" * 3000)
+    t.eq("超长访客文本被截断", len([m for m in db.list_guest_messages(link["link_id"], limit=500)
+                              if m["id"] == long_id][0]["text"]), 2000)
+
+    # -------------------------------------------------------------------- 审计
+    log_id = db.log_negotiation("needle", "intent_extract", bot_id=bid, level="info",
+                                proposal_id=proposal["proposal_id"], negotiation_id=nego["negotiation_id"],
+                                link_id=link["link_id"], chat_ref="a@smp", detail="命中 3 个槽",
+                                data={"tools": ["calendar.get_availability"]}, latency_ms=12.5)
+    t.check("审计写入返回 id", log_id > 0, str(log_id))
+    t.raises("拒绝非法阶段", LedgerError, db.log_negotiation, "bogus", "x")
+    t.raises("拒绝非法级别", LedgerError, lambda: db.log_negotiation("needle", "x", level="trace"))
+    db.log_negotiation("mac_node", "approve", bot_id=bid, level="error", detail="桥不可达",
+                       proposal_id=proposal["proposal_id"])
+    db.log_negotiation("guest", "token_replay", bot_id=bid, level="warn")
+    recent = db.recent_negotiations(bid, limit=50)
+    t.eq("审计按时间倒序", [r["stage"] for r in recent][0] in ("guest", "mac_node", "needle"), True)
+    needle_row = [r for r in recent if r["stage"] == "needle"][0]
+    t.eq("审计负载读回是 dict", needle_row["data"], {"tools": ["calendar.get_availability"]})
+    t.eq("审计延迟原样读回", round(needle_row["latency_ms"], 1), 12.5)
+    t.eq("审计长 detail 截到 500 字符", len([r for r in recent if r["stage"] == "needle"]
+                                       [0]["detail"]) <= 500, True)
+    needle_rows = db.recent_negotiations(bid, stage="needle")
+    t.eq("可按阶段筛审计", all(r["stage"] == "needle" for r in needle_rows) and len(needle_rows) >= 1, True)
+    t.eq("可按级别筛审计", all(r["level"] == "error" for r in db.recent_negotiations(bid, level="error")), True)
+    one = db.recent_negotiations(bid, proposal_id=proposal["proposal_id"])
+    t.eq("可按提案筛审计", all(r["proposal_id"] == proposal["proposal_id"] for r in one) and len(one) >= 2, True)
+    t.eq("审计 limit 生效", len(db.recent_negotiations(bid, limit=1)), 1)
+    t.eq("别的 bot 读不到审计", db.recent_negotiations("nope_bot"), [])
+    funnel = db.negotiation_funnel(bid)
+    t.check("漏斗给出各阶段计数", funnel["stages"].get("needle", 0) >= 1, str(funnel["stages"]))
+    t.eq("漏斗单独给出错误计数", funnel["errors"].get("mac_node", 0), 1)
+    t.eq("漏斗不串别的 bot", "guest" in db.negotiation_funnel(obid)["stages"], False)
+
+    # -------------------------------------------------------------- 忙闲缓存
+    busy = [{"start": start + 3600, "end": start + 5400}]
+    db.cache_busy(bid, "2026-11-27", busy, timezone="Asia/Shanghai", source="mac_node", ttl_seconds=600)
+    hit = db.cached_busy(bid, "2026-11-27")
+    t.check("缓存命中返回区间", hit is not None and hit["busy"] == busy, str(hit))
+    t.eq("缓存记住时区", hit["timezone"], "Asia/Shanghai")
+    t.eq("未写入的那天没有缓存", db.cached_busy(bid, "2026-11-28"), None)
+    t.eq("别的来源没有缓存", db.cached_busy(bid, "2026-11-27", source="needle"), None)
+    db.cache_busy(bid, "2026-11-27", [{"start": start, "end": start + 60}], source="mac_node")
+    rows = db.conn.execute("SELECT COUNT(*) FROM calendar_cache WHERE bot_id = ? AND day = ?",
+                           (bid, "2026-11-27")).fetchone()[0]
+    t.eq("同一天同一来源是覆盖而非叠加", int(rows), 1)
+    t.eq("覆盖后读到最新区间", db.cached_busy(bid, "2026-11-27")["busy"][0]["end"], start + 60)
+    db.cache_busy(bid, "2026-11-27", busy, source="local_mask", ttl_seconds=600)
+    t.eq("不同来源各自成行", int(db.conn.execute(
+        "SELECT COUNT(*) FROM calendar_cache WHERE bot_id = ? AND day = ?",
+        (bid, "2026-11-27")).fetchone()[0]), 2)
+    t.eq("TTL 到期后不再命中", db.cached_busy(bid, "2026-11-27", now=time.time() + 10000), None)
+    t.raises("拒绝畸形日期", LedgerError, db.cache_busy, bid, "2026-1-9", busy)
+    t.raises("拒绝不存在的日历日", LedgerError, db.cache_busy, bid, "2026-13-99", busy)
+    t.raises("拒绝非日期串", LedgerError, db.cache_busy, bid, "today", busy)
+    purged = db.purge_calendar_cache(now=time.time() + 10000)
+    t.check("清掉全部到期缓存", purged >= 2, str(purged))
+    t.eq("清理后读不到任何缓存", db.cached_busy(bid, "2026-11-27", now=time.time() + 10000), None)
+
+    # -------------------------------------------------------------- 汇总快照
+    snap = db.agent_snapshot(bid)
+    t.eq("快照包含四块控制台数据", sorted(k for k in snap if k != "recent"),
+         ["funnel", "guest_links", "negotiations", "proposals"])
+    t.check("快照给出最近审计", len(snap["recent"]) >= 1, str(len(snap["recent"])))
+    t.eq("快照的提案统计与单查一致", snap["proposals"]["totals"], db.proposal_stats(bid)["totals"])
+    t.eq("全量快照也可用", sorted(db.agent_snapshot()["funnel"]), ["errors", "stages"])
+
+    # ------------------------------------------------------------------ 级联删除
+    db.delete_bot(bid, hard=True)
+    for table in AGENT_TABLES:
+        left = int(db.conn.execute(f"SELECT COUNT(*) FROM {table} WHERE bot_id = ?", (bid,)).fetchone()[0])
+        t.eq(f"硬删除后 {table} 不再残留", left, 0)
+    t.eq("别的 Bot 的提案不受级联影响", int(db.conn.execute(
+        "SELECT COUNT(*) FROM agent_proposals WHERE bot_id = ?", (obid,)).fetchone()[0]) >= 1, True)
+
+
+def group_agent_console(test: SelfTest, h: Harness) -> None:
+    """控制台三块新面板的数据面：``/api/agent/*`` 的鉴权、校验、真实读写与访客链接闭环。
+
+    这一组只走 HTTP —— 面板调的就是这些路由；路由背后的账本、引擎、节点桥与门户已各自
+    成组。日历节点用注入式假传输，整组一个真实 socket 都不会开。
+    """
+    t = test
+    from .selftest_node import FakeNode  # noqa: PLC0415 - 它反向 import 本模块，顶层互 import 会成环
+
+    base = h.stack(
+        tag="agent-console",
+        GUEST_PUBLIC_BASE_URL="https://book.popopx.test",
+        MAC_NODE_ENABLED="1",
+        MAC_NODE_TOKEN="self-test-node-token",
+    )
+    node = FakeNode()
+    node.on(HEALTH_PATH, (200, {"ok": True, "service": "PopopxMacNode", "loopback": True}))
+    node.on(SNAPSHOT_PATH, (200, {"ok": True, "viewers": 1}))
+    node.on(ACTION_PROPOSALS, (200, {"ok": True, "proposalId": "ppx-pr-1", "approvalReceipt": "r1",
+                                     "calendarWritten": False}))
+    node.on("/approve", (200, {"ok": True, "calendarWritten": True, "state": "executed",
+                               "eventIdentifier": "ppx-bk-9", "sequence": 2}))
+    svc = RecordingServices()
+    # 面板路由读的是 stack.agent：换成带注入传输的运行时，「确认」才会真的打到假节点。
+    base.agent = AgentRuntime(db=base.db, settings=base.settings, sender=build_sender(svc), node_transport=node)
+    c, _ = h.client(base)
+    a = h.auth()
+    api = AGENT_API_PREFIX
+    bid = str(base.db.create_bot("console", 5470, display_name="面板Bot")["id"])
+    obid = str(base.db.create_bot("consoleother", 5471)["id"])
+    peer_addr = "ma_pQ7Zk2mVx3rN8sT1uW6xY7zA8bC9dE0f@smp1.popopx.test"
+    # 默认时区跟随本机，不写死：面板断言只要求「读回的就是默认那一份」。
+    default_prefs = c.get(f"{api}/prefs/{bid}", headers=a).json()
+    default_zone = default_prefs["preferences"]["timezone"]
+
+    # ------------------------------------------------------------------ 鉴权
+    unauth = c.get(f"{api}/summary")
+    t.eq("未鉴权访问管理面被拒", unauth.status_code, 401)
+    t.eq("401 走错误封套", sorted(unauth.json()["detail"]), ["description", "error_code", "ok"])
+    t.eq("错误 token 同样被拒", c.get(f"{api}/summary", headers={"X-Studio-Token": "nope"}).status_code, 401)
+    t.eq("管理面八条只读路由的返回码",
+         [c.get(f"{api}/{name}", headers=a).status_code for name in
+          ("summary", "engine", "peers", "proposals", "negotiations", "audit", "guest/links", "node")],
+         [200, 200, 400, 200, 200, 200, 200, 200])
+    t.eq("peers 是因为缺 bot_id 才报错",
+         c.get(f"{api}/peers", headers=a).json()["detail"]["description"], "缺少 bot_id")
+
+    # ------------------------------------------------------------------ 摘要
+    s = c.get(f"{api}/summary", headers=a).json()
+    t.eq("摘要六段齐全", sorted(s), ["funnel", "guest", "node", "ok", "runtime", "stages"])
+    t.eq("面板的阶段下拉与账本同源", s["stages"], list(AUDIT_STAGES))
+    t.eq("审计阶段共九段", len(AUDIT_STAGES), 9)
+    t.eq("漏斗两段", sorted(s["funnel"]), ["errors", "stages"])
+    t.eq("运行时点明插件 id", s["runtime"]["plugin_id"], "personal_agent")
+    t.eq("运行时七段", sorted(s["runtime"]),
+         ["counts", "errors", "mac_node", "needle", "peers", "plugin_id", "reasoner"])
+    t.eq("运行时给出六个计数", sorted(s["runtime"]["counts"]),
+         ["a2a", "approvals", "cards", "errors", "handled", "ics"])
+    t.eq("摘要里的节点段与 /node 同源", s["node"], c.get(f"{api}/node", headers=a).json()["node"])
+    t.eq("节点桥已开启", s["node"]["enabled"], True)
+    t.eq("节点桥锁定回环", s["node"]["loopback"], True)
+    t.eq("节点桥不跟随重定向", s["node"]["follow_redirects"], False)
+    t.eq("节点桥只报「令牌在场」", s["node"]["token_present"], True)
+    t.eq("节点桥的令牌是掩码", s["node"]["token"], "***")
+    t.check("摘要整份不外泄节点令牌", "self-test-node-token" not in json.dumps(s, ensure_ascii=False),
+            str(s["node"])[:160])
+    t.eq("访客前缀", s["guest"]["prefix"], LINK_PATH_PREFIX)
+    t.eq("访客基址取自配置", s["guest"]["public_base"], "https://book.popopx.test")
+    t.eq("基址可用时不给原因", s["guest"]["reason"], "")
+    t.eq("未点名 Bot 时不带 bot 段", "bot" not in s, True)
+    named = c.get(f"{api}/summary", headers=a, params={"bot_id": bid}).json()["bot"]
+    t.eq("点名 Bot 后给出十段", sorted(named),
+         ["bot_id", "enabled", "links", "locale", "negotiations", "owner_chat", "peers", "preferences",
+          "proposals", "timezone"])
+    t.eq("Bot 默认启用替身", named["enabled"], True)
+    t.eq("未配置主人会话时为空", named["owner_chat"], "")
+    t.eq("未配置语种回退后台语种", named["locale"], "en")
+    t.eq("未配置时区等于默认时区", named["timezone"], default_zone)
+    t.eq("摘要的偏好段就是 summary", named["preferences"], default_prefs["summary"])
+    t.eq("陌生 Bot 的摘要不报错", c.get(f"{api}/summary", headers=a, params={"bot_id": "nope"}).status_code, 200)
+
+    # ------------------------------------------------------------------ 引擎
+    eng = c.get(f"{api}/engine", headers=a).json()
+    t.eq("引擎面四段", sorted(eng), ["needle", "ok", "reasoner", "tools"])
+    t.eq("工具清单与抽取器同源", eng["tools"], list(TOOL_NAMES))
+    t.eq("毫秒级抽取器只挂五个工具", len(eng["tools"]), 5)
+    t.eq("工具命名空间只有两个", len({name.rsplit(".", 1)[0] for name in eng["tools"]}), 2)
+    needle = eng["needle"]
+    t.eq("面板刚打开时引擎尚未驻留", needle["weights_path"], "")
+    t.eq("未驻留时资产字段为空", [needle["asset_ok"], needle["asset_bytes"], needle["asset_sha256"]],
+         [False, 0, ""])
+    t.eq("引擎名只有两种取值", needle["engine"] in (ENGINE_NEEDLE, ENGINE_FALLBACK), True)
+    t.eq("降级标记与引擎名一致", needle["degraded"], needle["engine"] != ENGINE_NEEDLE)
+    t.eq("推理引擎未开启", eng["reasoner"]["enabled"], False)
+    t.eq("推理引擎未开启即不可用", eng["reasoner"]["usable"], False)
+    t.eq("未配推理 Key 时如实标注", eng["reasoner"]["api_key_configured"], False)
+    t.eq("非法引擎动作被拒", c.post(f"{api}/engine", headers=a, json={"action": "spin"}).status_code, 400)
+    t.eq("动作错误提示列出三个取值",
+         c.post(f"{api}/engine", headers=a, json={"action": "spin"}).json()["description"],
+         "action 只能是 load / unload / reload")
+    t.eq("缺请求体按非法动作处理", c.post(f"{api}/engine", headers=a).status_code, 400)
+    reload = c.post(f"{api}/engine", headers=a, json={"action": "reload"}).json()
+    t.eq("重载回显动作", reload["action"], "reload")
+    loaded = reload["needle"]
+    t.eq("内置权重通过完整性校验", loaded["asset_ok"], True)
+    t.eq("权重字节数可读", loaded["asset_bytes"] > 0, True)
+    t.eq("权重不超过内置上限", loaded["asset_bytes"] <= NEEDLE_MAX_WEIGHT_BYTES, True)
+    t.eq("校验和是 sha256 十六进制", len(loaded["asset_sha256"]), 64)
+    t.eq("校验和与内置清单同源", loaded["asset_sha256"], load_manifest().weights.sha256)
+    t.eq("重载后指向内置权重文件", loaded["weights_path"].endswith(NEEDLE_WEIGHT_FILE), True)
+    t.eq("重载后仍是已校验的资产", reload["needle"]["asset_ok"], True)
+    unload = c.post(f"{api}/engine", headers=a, json={"action": "unload"}).json()
+    t.eq("卸载后回到确定性路径", unload["needle"]["degraded"], True)
+    t.eq("卸载后引擎名如实降级", unload["engine"], ENGINE_FALLBACK)
+    t.eq("卸载后不再有已加载标记", c.get(f"{api}/engine", headers=a).json()["needle"]["degraded"], True)
+    t.eq("重新加载可用", c.post(f"{api}/engine", headers=a, json={"action": "load"}).status_code, 200)
+    t.eq("重新加载后恢复原引擎", c.post(f"{api}/engine", headers=a,
+                           json={"action": "reload"}).json()["needle"]["asset_ok"], True)
+
+    # ---------------------------------------------------------------- 试路由
+    t.eq("空文本被拒", c.post(f"{api}/extract", headers=a, json={"text": "   "}).status_code, 400)
+    t.eq("缺请求体被拒", c.post(f"{api}/extract", headers=a).status_code, 400)
+    ext = c.post(f"{api}/extract", headers=a,
+                 json={"text": "你明天下午有空吗？我们约 30 分钟。", "bot_id": bid}).json()
+    t.eq("试路由五段", sorted(ext), ["bot_id", "extraction", "locale", "ok", "timezone"])
+    t.eq("试路由回显 Bot", ext["bot_id"], bid)
+    t.eq("试路由语种已归一", ext["locale"] in LOCALES, True)
+    t.eq("未显式给时区时取该 Bot 的偏好", ext["timezone"], default_zone)
+    t.eq("抽取结果七段", sorted(ext["extraction"]),
+         ["calls", "degraded", "engine", "error", "intent", "latency_ms", "text"])
+    t.eq("试路由抽出问空档工具", [row["name"] for row in ext["extraction"]["calls"]][:1],
+         ["calendar.get_availability"])
+    t.eq("抽出的工具全在清单内",
+         [row["name"] for row in ext["extraction"]["calls"] if row["name"] not in TOOL_NAMES], [])
+    t.eq("毫秒级延迟有上报", ext["extraction"]["latency_ms"] >= 0.0, True)
+    t.eq("抽取不报错", ext["extraction"]["error"], "")
+    t.eq("试路由不写提案", len(base.db.list_proposals(bid)), 0)
+    t.eq("试路由不发消息", len(svc.sends), 0)
+    t.eq("试路由不调用日历节点", len(node.calls), 0)
+    zone = c.post(f"{api}/extract", headers=a,
+                  json={"text": "are you free tomorrow at 3pm?", "timezone": "Europe/Berlin",
+                        "locale": "de", "bot_id": bid}).json()
+    t.eq("显式时区优先于偏好", zone["timezone"], "Europe/Berlin")
+    t.eq("显式语种优先于偏好", zone["locale"], "de")
+    t.eq("非法语种回退而不报错",
+         c.post(f"{api}/extract", headers=a, json={"text": "hi", "locale": "ko"}).json()["locale"] in LOCALES,
+         True)
+    t.eq("不点名 Bot 也能试路由", c.post(f"{api}/extract", headers=a,
+                          json={"text": "hi"}).json()["bot_id"], "")
+    t.eq("不点名 Bot 时不给时区", c.post(f"{api}/extract", headers=a,
+                          json={"text": "hi"}).json()["timezone"], "")
+    long = c.post(f"{api}/extract", headers=a, json={"text": "周" * 5000}).json()
+    t.eq("超长文本被截到 2000 字", len(long["extraction"]["text"]), 2000)
+
+    # ------------------------------------------------------------------ 偏好
+    t.eq("偏好读回四段", sorted(default_prefs), ["bot_id", "ok", "preferences", "summary"])
+    t.eq("默认只在工作日排期", default_prefs["preferences"]["working_hours"]["days"], [1, 2, 3, 4, 5])
+    t.eq("默认工作时段 09:00-18:00",
+         [default_prefs["preferences"]["working_hours"]["start"],
+          default_prefs["preferences"]["working_hours"]["end"]], ["09:00", "18:00"])
+    t.eq("默认午休受保护", default_prefs["preferences"]["buffers"]["protect_lunch"], True)
+    t.eq("默认任何落地都要主人确认", default_prefs["preferences"]["negotiation"]["require_owner_approval"], True)
+    t.eq("默认单场不超过两小时", default_prefs["preferences"]["meeting"]["max_meeting_minutes"], 120)
+    t.eq("默认协商最多三轮", default_prefs["preferences"]["negotiation"]["rounds"], 3)
+    t.eq("默认两段屏蔽期", len(default_prefs["preferences"]["blocked_periods"]), 2)
+    t.eq("摘要十五段", len(default_prefs["summary"]), 15)
+    t.eq("摘要给出文件权限", default_prefs["summary"]["mode"], "0o600")
+    t.eq("摘要不回显关键词原文",
+         [term for term in ("roadmap", "合同", "复盘") if term in json.dumps(default_prefs["summary"])], [])
+    t.eq("陌生 Bot 的偏好读不到", c.get(f"{api}/prefs/nope", headers=a).status_code, 404)
+    t.eq("空 bot_id 的偏好读不到", c.get(f"{api}/prefs/", headers=a).status_code, 404)
+    t.eq("陌生 Bot 的偏好写不进", c.post(f"{api}/prefs/nope", headers=a, json={"locale": "de"}).status_code, 404)
+    t.eq("未知顶层键被拒", c.post(f"{api}/prefs/{bid}", headers=a, json={"hacker": 1}).status_code, 400)
+    t.eq("非法语气被拒", c.post(f"{api}/prefs/{bid}", headers=a,
+                    json={"copy": {"tone": "shouty"}}).status_code, 400)
+    t.eq("非法工作日被拒", c.post(f"{api}/prefs/{bid}", headers=a,
+                     json={"working_hours": {"days": [1, 9]}}).status_code, 400)
+    t.eq("空工作日被拒", c.post(f"{api}/prefs/{bid}", headers=a,
+                   json={"working_hours": {"days": []}}).status_code, 400)
+    t.eq("非法钟点被拒", c.post(f"{api}/prefs/{bid}", headers=a,
+                   json={"working_hours": {"start": "25:00"}}).status_code, 400)
+    t.eq("非数字钟点被拒", c.post(f"{api}/prefs/{bid}", headers=a,
+                    json={"working_hours": {"start": "9am"}}).status_code, 400)
+    t.eq("起止颠倒被拒", c.post(f"{api}/prefs/{bid}", headers=a,
+                   json={"working_hours": {"start": "18:00", "end": "09:00"}}).status_code, 400)
+    t.eq("未知屏蔽期字段被拒", c.post(f"{api}/prefs/{bid}", headers=a,
+                        json={"blocked_periods": [{"id": "x", "nope": 1}]}).status_code, 400)
+    t.eq("越界关键词权重被拒", c.post(f"{api}/prefs/{bid}", headers=a,
+                         json={"keywords": {"boost": [{"term": "roadmap", "weight": 99}]}}).status_code, 400)
+    t.eq("非法时区被拒", c.post(f"{api}/prefs/{bid}", headers=a,
+                  json={"timezone": "Nowhere/Zone"}).status_code, 400)
+    t.eq("非法语种被拒", c.post(f"{api}/prefs/{bid}", headers=a, json={"locale": "ko"}).status_code, 400)
+    t.check("校验失败带字段名", "locale" in c.post(f"{api}/prefs/{bid}", headers=a,
+                              json={"locale": "ko"}).json()["description"], "")
+    t.eq("被拒的写入不落盘", c.get(f"{api}/prefs/{bid}", headers=a).json()["preferences"]["timezone"],
+         default_zone)
+    wrapped = c.post(f"{api}/prefs/{bid}", headers=a,
+                     json={"preferences": {"timezone": "Europe/Berlin", "copy": {"tone": "formal"}}}).json()
+    t.eq("包一层 preferences 也能写", wrapped["preferences"]["timezone"], "Europe/Berlin")
+    t.eq("语气写进偏好", wrapped["preferences"]["copy"]["tone"], "formal")
+    flat = c.post(f"{api}/prefs/{bid}", headers=a, json={"locale": "de"}).json()
+    t.eq("平铺补丁同样可写", flat["preferences"]["locale"], "de")
+    t.eq("补丁是深合并而不是覆盖", flat["preferences"]["copy"]["tone"], "formal")
+    t.eq("写后读回一致", c.get(f"{api}/prefs/{bid}", headers=a).json()["preferences"]["timezone"],
+         "Europe/Berlin")
+    t.eq("摘要跟着写入更新", c.get(f"{api}/prefs/{bid}", headers=a).json()["summary"]["timezone"],
+         "Europe/Berlin")
+    prefs_file = base.agent.preferences.path_for(bid)
+    t.eq("偏好落在该 Bot 的隔离目录", prefs_file.parent, base.settings.agent_dir(bid))
+    t.eq("偏好文件名固定", prefs_file.name, PREFERENCES_FILENAME)
+    t.eq("偏好文件已生成", prefs_file.is_file(), True)
+    t.eq("偏好目录权限 0700", mode_of(prefs_file.parent), SECURE_DIR_MODE)
+    t.eq("偏好文件权限 0600", mode_of(prefs_file), SECURE_FILE_MODE)
+    reset = c.post(f"{api}/prefs/{bid}/reset", headers=a).json()
+    t.eq("重置回到默认时区", reset["preferences"]["timezone"], default_zone)
+    t.eq("重置清空语种覆盖", reset["preferences"]["locale"], "")
+    t.eq("重置回到默认语气", reset["preferences"]["copy"]["tone"], "concise")
+    t.eq("重置后读回也是默认", c.get(f"{api}/prefs/{bid}", headers=a).json()["preferences"]["timezone"],
+         default_zone)
+    t.eq("陌生 Bot 的重置被拒", c.post(f"{api}/prefs/nope/reset", headers=a).status_code, 404)
+    t.eq("两个 Bot 的偏好互不影响",
+         c.get(f"{api}/prefs/{obid}", headers=a).json()["preferences"]["timezone"], default_zone)
+    t.ne("每个 Bot 各自一份文件", base.agent.preferences.path_for(obid), prefs_file)
+
+    # ------------------------------------------------------------------ 对端
+    t.eq("缺 bot_id 的配对被拒", c.post(f"{api}/peers", headers=a,
+                          json={"identity": peer_addr}).status_code, 400)
+    t.eq("陌生 Bot 的配对被拒", c.post(f"{api}/peers", headers=a,
+                         json={"bot_id": "nope", "identity": peer_addr}).status_code, 404)
+    t.eq("空身份无法配对", c.post(f"{api}/peers", headers=a,
+                    json={"bot_id": bid, "identity": "  "}).status_code, 400)
+    t.eq("非法会话引用无法配对", c.post(f"{api}/peers", headers=a,
+                          json={"bot_id": bid, "identity": peer_addr, "chat": "nope!"}).status_code, 400)
+    t.eq("非法引用的错误提示点名原值",
+         "nope!" in c.post(f"{api}/peers", headers=a,
+                           json={"bot_id": bid, "identity": peer_addr, "chat": "nope!"}).json()["description"],
+         True)
+    paired = c.post(f"{api}/peers", headers=a,
+                    json={"bot_id": bid, "identity": peer_addr, "label": "老张", "chat": "@9"}).json()
+    t.eq("配对响应三段", sorted(paired), ["bot_id", "ok", "peer"])
+    t.eq("配对五段视图", sorted(paired["peer"]),
+         ["chat", "derived", "identity", "label", "wire_identity"])
+    t.eq("配对保留真实地址", paired["peer"]["identity"], peer_addr)
+    t.eq("帧内身份换成映射 token", paired["peer"]["wire_identity"][:4], "ppx-")
+    t.eq("映射后的身份只剩 id 字符",
+         [ch for ch in paired["peer"]["wire_identity"] if not (ch.isalnum() or ch in "-_")], [])
+    t.eq("帧内身份与编排层映射一致", paired["peer"]["wire_identity"], wire_identity(peer_addr))
+    t.eq("未配密钥时标注派生", paired["peer"]["derived"], True)
+    t.eq("配对响应不含密钥字段", "key" in paired["peer"], False)
+    t.eq("配对带上主人会话", paired["peer"]["chat"], "@9")
+    listed = c.get(f"{api}/peers", headers=a, params={"bot_id": bid}).json()
+    t.eq("列表三段", sorted(listed), ["bot_id", "ok", "peers", "self_identity"])
+    t.eq("列表含刚配对的一条", len(listed["peers"]), 1)
+    t.check("列表带本方身份", bool(listed["self_identity"]), str(listed["self_identity"])[:60])
+    t.check("列表不含会话密钥", "key" not in json.dumps(listed["peers"]), str(listed["peers"])[:160])
+    t.eq("别的 Bot 列不到这个对端", c.get(f"{api}/peers", headers=a, params={"bot_id": obid}).json()["peers"], [])
+    peers_file = base.agent.peers_path(bid)
+    t.eq("配对表落在 Bot 隔离目录", peers_file.parent, base.settings.agent_dir(bid))
+    t.eq("配对表权限 0600", mode_of(peers_file), SECURE_FILE_MODE)
+    raw_peers = json.loads(peers_file.read_text(encoding="utf-8"))
+    t.eq("配对表四段", sorted(raw_peers), ["bot_id", "peers", "updated_at", "version"])
+    t.eq("配对表里密钥是空串", raw_peers["peers"][0]["key"], "")
+    t.check("配对表保留真实地址", peer_addr in peers_file.read_text(encoding="utf-8"), peer_addr[:24])
+    removed = c.post(f"{api}/peers/remove", headers=a, json={"bot_id": bid, "identity": peer_addr}).json()
+    t.eq("移除已配对返回真", removed["removed"], True)
+    t.eq("再移除同一个返回假", c.post(f"{api}/peers/remove", headers=a,
+                         json={"bot_id": bid, "identity": peer_addr}).json()["removed"], False)
+    t.eq("移除后列表为空", c.get(f"{api}/peers", headers=a, params={"bot_id": bid}).json()["peers"], [])
+    t.eq("陌生 Bot 的移除被拒", c.post(f"{api}/peers/remove", headers=a,
+                          json={"bot_id": "nope", "identity": peer_addr}).status_code, 404)
+    t.eq("空身份的移除返回假", c.post(f"{api}/peers/remove", headers=a,
+                        json={"bot_id": bid, "identity": ""}).json()["removed"], False)
+    c.post(f"{api}/peers", headers=a, json={"bot_id": bid, "identity": peer_addr, "chat": "@9"})
+
+    # ------------------------------------------------------------ 提案与决定
+    now = time.time()
+    declined = base.db.create_proposal(
+        bid, "create", source="operator", chat_type="direct", chat_ref="@9", timezone="Asia/Shanghai",
+        start_ts=now + 3600, end_ts=now + 5400, summary="面板否决")
+    t.eq("新建提案是 pending", declined["status"], "pending")
+    t.eq("提案号有前缀", declined["proposal_id"][:3], "pr_")
+    bad = c.post(f"{api}/proposals/{declined['proposal_id']}/decision", headers=a,
+                 json={"decision": "teleport"})
+    t.eq("非法决定被拒", bad.status_code, 400)
+    t.eq("决定错误提示列出三个取值", bad.json()["description"], "decision 只能是 approve / decline / alternative")
+    t.eq("非法决定不改状态", base.db.get_proposal(declined["proposal_id"])["status"], "pending")
+    t.eq("非法决定一个节点请求都不发", len(node.calls), 0)
+    missing = c.post(f"{api}/proposals/pr_nope/decision", headers=a, json={"decision": "approve"})
+    t.eq("不存在的提案返回 404", missing.status_code, 404)
+    t.eq("404 走错误封套", sorted(missing.json()), ["description", "error_code", "ok"])
+    t.eq("不存在的提案不发消息", len(svc.sends), 0)
+    off = c.post(f"{api}/proposals/{declined['proposal_id']}/decision", headers=a,
+                 json={"decision": "decline"}).json()
+    t.eq("控制台可否决提案", off["status"], "declined")
+    t.check("否决给出主人可读的回复", bool(off["reply"].strip()), repr(off["reply"])[:80])
+    t.eq("否决不触碰日历节点", len(node.calls), 0)
+    t.eq("否决写进 lifecycle 审计",
+         [row["event"] for row in base.db.recent_negotiations(bid, stage="lifecycle")][:1], ["declined"])
+    revived = c.post(f"{api}/proposals/{declined['proposal_id']}/decision", headers=a,
+                     json={"decision": "approve"}).json()
+    t.eq("终态提案不会被复活", revived["status"], "declined")
+    t.eq("复活尝试不写日历", node.count(ACTION_PROPOSALS), 0)
+    t.eq("复活尝试记一条拒绝审计",
+         any(row["stage"] == "mac_node" and row["level"] == "warn"
+             for row in base.db.recent_negotiations(bid, stage="mac_node")), True)
+    sends_before_land = len(svc.sends)
+    landed = base.db.create_proposal(bid, "create", source="guest", chat_type="direct", chat_ref="@9",
+                                     timezone="Asia/Shanghai", start_ts=now + 7200, end_ts=now + 9000,
+                                     summary="面板落地")
+    approved = c.post(f"{api}/proposals/{landed['proposal_id']}/decision", headers=a,
+                      json={"decision": "approve"}).json()
+    t.eq("确认后提案落地", approved["status"], "approved")
+    t.eq("确认打了提案接口", node.count(ACTION_PROPOSALS), 1)
+    t.eq("确认打了批准接口", node.count("/approve"), 1)
+    t.eq("批准带上节点回执", node.last("/approve")["payload"], {"receipt": "r1"})
+    t.eq("提案接口带上标题", node.last(ACTION_PROPOSALS)["payload"]["title"], "面板落地")
+    t.eq("提案接口带上 ISO 起止",
+         sorted(key for key in node.last(ACTION_PROPOSALS)["payload"] if key.endswith("Iso")),
+         ["endIso", "startIso"])
+    t.eq("确认带上节点令牌", node.last("/approve")["headers"][TOKEN_HEADER], "self-test-node-token")
+    t.eq("节点事件号写回账本", approved["proposal"]["node_event_id"], "ppx-bk-9")
+    t.eq("确认后审批计数增长", base.agent.status()["counts"]["approvals"], 1)
+    ics_rows = [row for row in svc.sends[sends_before_land:] if str(row.get("file_path", "")).endswith(".ics")]
+    t.eq("确认后只发一条附件", len(ics_rows), 1)
+    t.eq("邀请带插件署名", ics_rows[0]["plugin_id"], "personal_agent")
+    t.eq("邀请发到提案里的会话", [ics_rows[0]["chat_type"], ics_rows[0]["chat_id"]], ["direct", 9])
+    invite = Path(ics_rows[0]["file_path"])
+    t.eq("邀请落在该 Bot 的 invites 目录", invite.parent.name, "invites")
+    t.eq("邀请目录权限 0700", mode_of(invite.parent), 0o700)
+    t.eq("邀请文件权限 0600", mode_of(invite), SECURE_FILE_MODE)
+    t.contains("邀请是真 .ics", invite.read_text(encoding="utf-8"), "BEGIN:VCALENDAR")
+    t.eq("账本记下 .ics 路径", base.db.get_proposal(landed["proposal_id"])["ics_path"], str(invite))
+    t.eq("ics 计数增长", base.agent.status()["counts"]["ics"], 1)
+    t.eq("确认写进 mac_node 审计",
+         [row["event"] for row in base.db.recent_negotiations(bid, stage="mac_node")][:1], ["approve"])
+    alt = base.db.create_proposal(bid, "reschedule", source="a2a", chat_ref="@9", summary="面板改期",
+                                  timezone="Asia/Shanghai", start_ts=now + 10800, end_ts=now + 12600)
+    other = c.post(f"{api}/proposals/{alt['proposal_id']}/decision", headers=a,
+                   json={"decision": "alternative"}).json()
+    t.eq("改选别的时间置为 superseded", other["status"], "superseded")
+    t.eq("改选不写日历", node.count(ACTION_PROPOSALS), 1)
+    t.eq("改选不再发附件", len([row for row in svc.sends if row.get("file_path")]), 1)
+    t.eq("改选的回复是空话术", other["reply"], "")
+    again = c.post(f"{api}/proposals/{alt['proposal_id']}/decision", headers=a, json={}).json()
+    t.eq("缺 decision 字段按确认处理", again["status"], "superseded")
+    t.eq("已改选的提案不再落地", node.count(ACTION_PROPOSALS), 1)
+    rows = c.get(f"{api}/proposals", headers=a, params={"bot_id": bid}).json()
+    t.eq("提案列表三段", sorted(rows), ["ok", "proposals", "stats"])
+    t.eq("列表含全部三条", len(rows["proposals"]), 3)
+    t.eq("统计按状态汇总 declined", rows["stats"]["totals"]["declined"], 1)
+    t.eq("统计按状态汇总 approved", rows["stats"]["totals"]["approved"], 1)
+    t.eq("统计按状态汇总 superseded", rows["stats"]["totals"]["superseded"], 1)
+    t.eq("统计把动作与状态拆开计数", "create:approved" in rows["stats"]["breakdown"], True)
+    t.eq("按状态筛提案", [row["proposal_id"] for row in
+                   c.get(f"{api}/proposals", headers=a,
+                         params={"bot_id": bid, "status": "approved"}).json()["proposals"]],
+         [landed["proposal_id"]])
+    t.eq("非法状态筛出空列表", c.get(f"{api}/proposals", headers=a,
+                        params={"bot_id": bid, "status": "zombie"}).json()["proposals"], [])
+    t.eq("limit 收窄列表", len(c.get(f"{api}/proposals", headers=a,
+                        params={"bot_id": bid, "limit": 1}).json()["proposals"]), 1)
+    t.eq("超大 limit 被夹到上限", len(c.get(f"{api}/proposals", headers=a,
+                             params={"bot_id": bid, "limit": 99999}).json()["proposals"]), 3)
+    t.eq("不点名 Bot 也能列提案",
+         len(c.get(f"{api}/proposals", headers=a).json()["proposals"]) >= 3, True)
+    t.eq("陌生 Bot 的列表为空", c.get(f"{api}/proposals", headers=a,
+                       params={"bot_id": "nope"}).json()["proposals"], [])
+    t.eq("陌生 Bot 的统计仍是六档", len(c.get(f"{api}/proposals", headers=a,
+                              params={"bot_id": "nope"}).json()["stats"]["totals"]), 6)
+
+    # ------------------------------------------------------------------ 协商
+    t.eq("缺对端起手被拒", c.post(f"{api}/negotiate", headers=a, json={"bot_id": bid}).status_code, 400)
+    t.eq("陌生 Bot 起手被拒", c.post(f"{api}/negotiate", headers=a,
+                       json={"bot_id": "nope", "peer": peer_addr}).status_code, 404)
+    calls_before_nego = len(node.calls)
+    avail_before_nego = node.count(ACTION_AVAILABILITY)
+    sends_before_nego = len(svc.sends)
+    start = c.post(f"{api}/negotiate", headers=a,
+                   json={"bot_id": bid, "peer": peer_addr, "duration_minutes": 45, "days": 3}).json()
+    t.eq("起手回显 Bot 与对端", [start["bot_id"], start["peer"]], [bid, peer_addr])
+    t.eq("起手先现算自己的空档", node.count(ACTION_AVAILABILITY) > avail_before_nego, True)
+    t.eq("节点没给出忙闲就不起手", start["status"], "no_slots")
+    t.check("起手给出失败原因", bool(start["reason"]), str(start)[:160])
+    t.eq("起手不建协商记录", base.db.list_negotiations(bid), [])
+    t.eq("起手不发消息", len(svc.sends), sends_before_nego)
+    t.eq("起手不产生 5xx", c.post(f"{api}/negotiate", headers=a,
+                       json={"bot_id": bid, "peer": peer_addr}).status_code, 200)
+    t.eq("对端也可以写会话引用", c.post(f"{api}/negotiate", headers=a,
+                          json={"bot_id": bid, "peer": "@9"}).json()["peer"], "@9")
+    nego = base.db.create_negotiation(bid, peer_addr, channel="a2a", owner_timezone="Asia/Shanghai",
+                                      peer_timezone="Europe/Berlin", window_start=now,
+                                      window_end=now + 86400, duration_minutes=60, expires_at=now + 7200)
+    nlist = c.get(f"{api}/negotiations", headers=a, params={"bot_id": bid}).json()
+    t.eq("协商列表三段", sorted(nlist), ["negotiations", "ok", "stats"])
+    t.eq("列表含刚建的协商", [row["negotiation_id"] for row in nlist["negotiations"]], [nego["negotiation_id"]])
+    t.eq("协商记录的通道", nlist["negotiations"][0]["channel"], "a2a")
+    t.eq("协商记录两侧时区",
+         [nlist["negotiations"][0]["owner_timezone"], nlist["negotiations"][0]["peer_timezone"]],
+         ["Asia/Shanghai", "Europe/Berlin"])
+    t.eq("新建协商是 open", nlist["negotiations"][0]["status"], "open")
+    t.eq("协商记录原样保存对端引用", nlist["negotiations"][0]["peer_identity"], peer_addr)
+    t.check("协商统计给出总量", nlist["stats"]["total"] >= 1, str(nlist["stats"])[:120])
+    t.eq("按状态筛协商命中自己", [row["negotiation_id"] for row in
+                   c.get(f"{api}/negotiations", headers=a,
+                         params={"bot_id": bid, "status": "open"}).json()["negotiations"]],
+         [nego["negotiation_id"]])
+    t.eq("按别的状态筛为空", c.get(f"{api}/negotiations", headers=a,
+                    params={"bot_id": bid, "status": "converged"}).json()["negotiations"], [])
+    t.eq("陌生 Bot 的协商列表为空",
+         c.get(f"{api}/negotiations", headers=a, params={"bot_id": "nope"}).json()["negotiations"], [])
+
+    # ------------------------------------------------------------------ 审计
+    audit = c.get(f"{api}/audit", headers=a, params={"bot_id": bid}).json()
+    t.eq("审计三段", sorted(audit), ["audit", "funnel", "ok"])
+    t.check("审计有内容", len(audit["audit"]) >= 6, str(len(audit["audit"])))
+    t.eq("审计行十三段", sorted(audit["audit"][0]),
+         ["bot_id", "chat_ref", "data", "detail", "event", "id", "latency_ms", "level", "link_id",
+          "negotiation_id", "proposal_id", "stage", "ts"])
+    t.eq("审计阶段全部落在白名单内", sorted({row["stage"] for row in audit["audit"]} - set(AUDIT_STAGES)), [])
+    t.eq("审计级别不越出账本白名单", sorted({row["level"] for row in audit["audit"]} - set(AUDIT_LEVELS)), [])
+    t.check("节点缺路由的失败记为 error",
+            any(row["level"] == "error" for row in audit["audit"]),
+            str(sorted({row["level"] for row in audit["audit"]})))
+    t.eq("审计按时间倒序",
+         [row["ts"] for row in audit["audit"]] == sorted((row["ts"] for row in audit["audit"]), reverse=True),
+         True)
+    t.eq("审计 data 已解码为对象", isinstance(audit["audit"][0]["data"], dict), True)
+    t.check("审计带上提案号", any(row["proposal_id"] for row in audit["audit"]), str(audit["audit"][0])[:160])
+    t.eq("漏斗的错误段是字典", isinstance(audit["funnel"]["errors"], dict), True)
+    t.eq("漏斗的阶段计数非负", all(int(v) >= 0 for v in audit["funnel"]["stages"].values()), True)
+    t.check("漏斗能看到 mac_node 这一段", int(audit["funnel"]["stages"].get("mac_node", 0)) >= 2,
+            str(audit["funnel"]["stages"])[:160])
+    t.eq("非法 stage 被拒", c.get(f"{api}/audit", headers=a, params={"stage": "bogus"}).status_code, 400)
+    t.eq("stage 错误提示列出全部阶段",
+         c.get(f"{api}/audit", headers=a, params={"stage": "bogus"}).json()["description"],
+         f"stage 只能是 {'/'.join(AUDIT_STAGES)}")
+    for stage in AUDIT_STAGES:
+        got = c.get(f"{api}/audit", headers=a, params={"bot_id": bid, "stage": stage}).json()["audit"]
+        t.eq(f"按 {stage} 筛审计只出该阶段", sorted({row["stage"] for row in got} - {stage}), [])
+    t.eq("按级别筛审计", sorted({row["level"] for row in
+                       c.get(f"{api}/audit", headers=a, params={"level": "warn"}).json()["audit"]}), ["warn"])
+    t.eq("非法级别筛出空列表", c.get(f"{api}/audit", headers=a,
+                        params={"level": "verbose"}).json()["audit"], [])
+    t.eq("按提案筛审计", sorted({row["proposal_id"] for row in
+                      c.get(f"{api}/audit", headers=a,
+                            params={"proposal_id": landed["proposal_id"]}).json()["audit"]}),
+         [landed["proposal_id"]])
+    t.eq("陌生 Bot 的审计为空", c.get(f"{api}/audit", headers=a, params={"bot_id": "nope"}).json()["audit"], [])
+    t.eq("审计 limit 生效", len(c.get(f"{api}/audit", headers=a, params={"limit": 2}).json()["audit"]), 2)
+    t.eq("非法 limit 不产生 5xx", c.get(f"{api}/audit", headers=a, params={"limit": "abc"}).status_code, 422)
+    t.eq("审计里能看到这次否决", any(row["stage"] == "lifecycle" and row["event"] == "declined"
+                        for row in c.get(f"{api}/audit", headers=a,
+                                         params={"bot_id": bid}).json()["audit"]), True)
+
+    # -------------------------------------------------------------- 访客链接
+    t.eq("缺 bot_id 签发被拒", c.post(f"{api}/guest/links", headers=a, json={}).status_code, 400)
+    t.eq("陌生 Bot 签发被拒", c.post(f"{api}/guest/links", headers=a,
+                       json={"bot_id": "nope"}).status_code, 404)
+    t.eq("零访问额度被夹成一次", c.post(f"{api}/guest/links", headers=a,
+                          json={"bot_id": bid, "max_uses": 0}).json()["link"]["max_uses"], 1)
+    t.eq("超长时长被夹到上限", c.post(f"{api}/guest/links", headers=a,
+                    json={"bot_id": bid, "duration_minutes": 9999}).json()["link"]["duration_minutes"], 480)
+    t.eq("非法 ttl 被拒", c.post(f"{api}/guest/links", headers=a,
+                   json={"bot_id": bid, "ttl_hours": 0}).status_code, 400)
+    t.eq("超长 ttl 被拒", c.post(f"{api}/guest/links", headers=a,
+                   json={"bot_id": bid, "ttl_hours": 99999}).status_code, 400)
+    t.eq("短于最小存活期被拒", c.post(f"{api}/guest/links", headers=a,
+                        json={"bot_id": bid, "ttl_hours": 0.001}).status_code, 400)
+    t.eq("非法时区签发被拒", c.post(f"{api}/guest/links", headers=a,
+                      json={"bot_id": bid, "timezone": "Nowhere/Zone"}).status_code, 400)
+    issued = c.post(f"{api}/guest/links", headers=a,
+                    json={"bot_id": bid, "label": "张三", "topic": "项目同步", "max_uses": 2,
+                          "duration_minutes": 45, "ttl_hours": 24, "timezone": "Asia/Shanghai",
+                          "created_by": "console"}).json()
+    t.eq("签发响应三段", sorted(issued), ["bot_id", "link", "ok"])
+    link = issued["link"]
+    t.eq("签发回六段", sorted(link), ["duration_minutes", "expires_at", "link_id", "max_uses", "token", "url"])
+    t.eq("链接 id 有前缀", link["link_id"][:3], "gl_")
+    t.eq("签发链接带前缀", link["url"].startswith("https://book.popopx.test" + LINK_PATH_PREFIX), True)
+    t.eq("链接尾段就是令牌凭据", link["url"].split(LINK_PATH_PREFIX, 1)[1], link["token"])
+    t.check("令牌足够长", len(link["token"]) >= 40, str(len(link["token"])))
+    t.eq("ttl 落到过期时间", round(link["expires_at"] - now), 24 * 3600)
+    t.eq("时长落到链接", link["duration_minutes"], 45)
+    listed_links = c.get(f"{api}/guest/links", headers=a, params={"bot_id": bid}).json()
+    t.eq("列表响应五段", sorted(listed_links), ["links", "ok", "prefix", "public_base", "stats"])
+    t.eq("列表给出公开前缀", listed_links["prefix"], LINK_PATH_PREFIX)
+    t.eq("列表给出公开基址", listed_links["public_base"], "https://book.popopx.test")
+    row = [item for item in listed_links["links"] if item["link_id"] == link["link_id"]][0]
+    t.eq("列表行十九段视图", len(row), 19)
+    t.check("列表行不含完整令牌", "token" not in row, sorted(row))
+    t.eq("列表只有掩码指纹", row["token_mask"], link["token"][:TOKEN_MASK_CHARS] + TOKEN_MASK)
+    t.check("列表整份不外泄令牌", link["token"] not in json.dumps(listed_links, ensure_ascii=False),
+            str(listed_links)[:160])
+    t.eq("列表行给出 Bot", row["bot_id"], bid)
+    t.eq("列表行给出额度", [row["max_uses"], row["uses"], row["remaining"]], [2, 0, 2])
+    t.eq("列表行状态", row["status"], "active")
+    t.eq("列表行尚未确认", [row["confirmed"], row["ics_ready"]], [False, False])
+    t.eq("列表行带回写主题", row["topic"], "项目同步")
+    t.eq("列表统计三段", sorted(listed_links["stats"]), ["active", "total", "visits"])
+    t.eq("列表统计与链接条数一致", listed_links["stats"]["total"], 3)
+    t.eq("陌生 Bot 的列表为空", c.get(f"{api}/guest/links", headers=a,
+                        params={"bot_id": "nope"}).json()["links"], [])
+    revealed = c.post(f"{api}/guest/links/{link['link_id']}/url", headers=a, json={"bot_id": bid}).json()
+    t.eq("取链接响应三段", sorted(revealed), ["link", "link_id", "ok"])
+    t.eq("逐条取回的是同一条链接", revealed["link"]["url"], link["url"])
+    t.eq("取回视图比列表行只多一个 url",
+         sorted(set(revealed["link"]) - set(row)), ["url"])
+    t.eq("取回视图不缺列表行的字段", sorted(set(row) - set(revealed["link"])), [])
+    t.check("取回视图也不落 token 字段", "token" not in revealed["link"], sorted(revealed["link"]))
+    t.eq("不点名 Bot 也能取链接", c.post(f"{api}/guest/links/{link['link_id']}/url", headers=a,
+                          json={}).json()["link"]["url"], link["url"])
+    t.eq("陌生链接取不到", c.post(f"{api}/guest/links/gl_nope/url", headers=a,
+                    json={"bot_id": bid}).status_code, 404)
+    t.eq("别的 Bot 取不到这条链接", c.post(f"{api}/guest/links/{link['link_id']}/url", headers=a,
+                            json={"bot_id": obid}).status_code, 404)
+    t.eq("取链接写进审计",
+         [item["event"] for item in base.db.recent_negotiations(bid, stage="guest")
+          if item["event"] == "url_reveal"][:1], ["url_reveal"])
+    visitor = c.get(f"/book/{link['token']}")
+    t.eq("控制台签发的链接访客可直接打开", visitor.status_code, 200)
+    t.eq("访客页不带管理令牌", "x-studio-token" in str(visitor.request.headers).lower(), False)
+    t.check("访客页不回显完整令牌", link["token"] not in visitor.text, link["token"][:12])
+    t.eq("访客页声明不缓存", visitor.headers["cache-control"], "no-store, max-age=0")
+    t.eq("访客页禁止索引", visitor.headers["x-robots-tag"], "noindex, nofollow")
+    t.eq("访客页禁止嗅探", visitor.headers["x-content-type-options"], "nosniff")
+    t.contains("访客页禁止脚本", visitor.headers["content-security-policy"], "script-src 'none'")
+    t.eq("访客页不写引用", visitor.headers["referrer-policy"], "no-referrer")
+    t.contains("访客页打开记一次访问",
+               json.dumps([item["event"] for item in base.db.recent_negotiations(bid, stage="guest")]),
+               "visited")
+    opened = c.get(f"{api}/guest/links", headers=a, params={"bot_id": bid}).json()
+    after = [item for item in opened["links"] if item["link_id"] == link["link_id"]][0]
+    t.eq("访客打开一次计一次", after["uses"], 1)
+    t.eq("剩余次数随之收窄", after["remaining"], 1)
+    t.eq("多一段字符的令牌签名不合法", c.get("/book/" + link["token"] + "x").status_code, 400)
+    t.eq("无分隔符的随机串按非法令牌处理", c.get("/book/" + "z" * 48).status_code, 400)
+    t.eq("空令牌走缺令牌分支", c.get(LINK_PATH_PREFIX.rstrip("/")).status_code, 400)
+    revoked = c.post(f"{api}/guest/links/{link['link_id']}/revoke", headers=a, json={"bot_id": bid}).json()
+    t.eq("控制台可吊销链接", revoked["link"]["status"], "revoked")
+    t.eq("吊销响应三段", sorted(revoked), ["link", "link_id", "ok"])
+    t.check("吊销写了时间戳", revoked["link"]["revoked_at"] > 0, str(revoked["link"]["revoked_at"]))
+    t.eq("吊销后取链接被拒", c.post(f"{api}/guest/links/{link['link_id']}/url", headers=a,
+                     json={"bot_id": bid}).status_code, 410)
+    t.eq("吊销后访客页立即失效", c.get(f"/book/{link['token']}").status_code, 410)
+    t.check("失效页不泄露令牌", link["token"] not in c.get(f"/book/{link['token']}").text, link["token"][:12])
+    t.eq("重复吊销仍是 revoked", c.post(f"{api}/guest/links/{link['link_id']}/revoke", headers=a,
+                          json={"bot_id": bid}).json()["link"]["status"], "revoked")
+    t.eq("陌生链接吊销被拒", c.post(f"{api}/guest/links/gl_nope/revoke", headers=a,
+                      json={"bot_id": bid}).status_code, 404)
+    t.eq("吊销写进审计", any(item["event"] == "revoked"
+                  for item in base.db.recent_negotiations(bid, stage="guest")), True)
+    doomed = c.post(f"{api}/guest/links", headers=a,
+                    json={"bot_id": bid, "label": "临期", "ttl_hours": 1}).json()["link"]
+    base.db.conn.execute("UPDATE guest_links SET expires_at = ? WHERE link_id = ?",
+                         (time.time() - 10, doomed["link_id"]))
+    base.db.conn.commit()
+    quiet = c.get(f"{api}/guest/links", headers=a, params={"bot_id": bid}).json()["links"]
+    t.check("默认列表过滤过期链接", doomed["link_id"] not in {item["link_id"] for item in quiet},
+            str([item["link_id"] for item in quiet]))
+    whole = c.get(f"{api}/guest/links", headers=a,
+                  params={"bot_id": bid, "include_expired": "true"}).json()["links"]
+    t.check("勾选含过期后才出现", doomed["link_id"] in {item["link_id"] for item in whole},
+            str([item["link_id"] for item in whole]))
+    t.eq("过期链接状态已改写", [item for item in whole if item["link_id"] == doomed["link_id"]][0]["status"],
+         "expired")
+    t.eq("过期链接访客页 410", c.get(f"/book/{doomed['token']}").status_code, 410)
+
+    # ------------------------------------------------------------------ 节点
+    calls_before_node = len(node.calls)
+    local = c.get(f"{api}/node", headers=a).json()["node"]
+    t.eq("GET 节点状态一个请求都不发", len(node.calls), calls_before_node)
+    t.eq("节点状态给出回环基址", local["base_url"], DEFAULT_MAC_NODE_URL)
+    t.eq("节点状态标记注入传输", local["transport"], "injected")
+    t.eq("节点状态带账本缓存", local["cache"], "ledger")
+    t.eq("节点状态列出真实路由", sorted(local["routes"]),
+         ["availability", "bookings", "command", "engine_invoke", "health", "proposals", "settings", "snapshot"])
+    t.eq("健康检查路由", local["routes"]["health"], HEALTH_PATH)
+    t.eq("提案路由带命名空间", local["routes"]["proposals"], "/v1/tools/calendar/proposals")
+    t.eq("命令前缀逐字对齐节点", local["command_prefix"], COMMAND_PREFIX)
+    t.eq("节点状态里的头已掩码", local["headers"][TOKEN_HEADER], "***")
+    t.eq("载荷上限可读", local["payload_char_limit"], MAX_SIGNAL_PAYLOAD_CHARACTERS)
+    t.eq("超时上报为数字", local["timeout_seconds"] > 0, True)
+    probed = c.post(f"{api}/node/probe", headers=a)
+    t.eq("探活可用", probed.status_code, 200)
+    t.eq("探活四段", sorted(probed.json()), ["health", "node", "ok", "snapshot"])
+    t.eq("探活只发两次 GET", [call["method"] for call in node.calls[-2:]], ["GET", "GET"])
+    t.eq("探活先打健康检查", node.calls[-2]["url"].endswith(HEALTH_PATH), True)
+    t.eq("探活再打快照", node.calls[-1]["url"].endswith(SNAPSHOT_PATH), True)
+    t.eq("探活带上节点令牌", node.calls[-1]["headers"][TOKEN_HEADER], "self-test-node-token")
+    t.eq("探活回显健康检查", probed.json()["health"]["service"], "PopopxMacNode")
+    t.eq("探活回显快照", probed.json()["snapshot"]["viewers"], 1)
+    t.eq("探活恰好加两次调用", c.get(f"{api}/node", headers=a).json()["node"]["calls"],
+         local["calls"] + 2)
+    t.eq("探活成功后不留失败原因", c.get(f"{api}/node", headers=a).json()["node"]["last_reason"], "")
+    idle = len(node.calls)
+    c.get(f"{api}/node", headers=a)
+    t.eq("探活之后再读节点状态仍然零外发", len(node.calls), idle)
+    unreachable = FakeNode()
+    unreachable.on(HEALTH_PATH, OSError("connection refused"))
+    unreachable.on(SNAPSHOT_PATH, (404, {"error": "no such route", "status": 404}))
+    base.agent = AgentRuntime(db=base.db, settings=base.settings, sender=build_sender(svc),
+                              node_transport=unreachable)
+    sends_before_probe = len(svc.sends)
+    down = c.post(f"{api}/node/probe", headers=a)
+    t.eq("健康检查失败即 502", down.status_code, 502)
+    t.contains("不可达原因写进描述", down.json()["description"], "节点不可达")
+    t.eq("不可达只打了一次健康检查", len(unreachable.calls), 1)
+    t.eq("不可达时不再打快照", unreachable.count(SNAPSHOT_PATH), 0)
+    t.eq("探活失败不改变提案状态", base.db.get_proposal(landed["proposal_id"])["status"], "approved")
+    t.eq("探活失败不多发消息", len(svc.sends), sends_before_probe)
+    t.check("失败计入节点计数", c.get(f"{api}/node", headers=a).json()["node"]["failures"] >= 1,
+            str(c.get(f"{api}/node", headers=a).json()["node"]["failures"]))
+    base.agent = AgentRuntime(db=base.db, settings=base.settings, sender=build_sender(svc), node_transport=node)
+    hijack = FakeNode()
+    base.agent = AgentRuntime(db=base.db, settings=base.settings, sender=build_sender(svc), node_transport=hijack)
+    original_url = base.settings.mac_node_url
+    try:
+        base.settings.mac_node_url = "http://169.254.169.254/latest/meta-data"
+        refused = c.post(f"{api}/node/probe", headers=a)
+        t.eq("被改成非回环后仍被拒", refused.status_code, 502)
+        t.eq("非回环时一个字节都没外送", len(hijack.calls), 0)
+        t.eq("状态里如实标注非回环", c.get(f"{api}/node", headers=a).json()["node"]["loopback"], False)
+        t.check("拒绝原因写进状态",
+                bool(c.get(f"{api}/node", headers=a).json()["node"]["loopback_refusal"]), "")
+        t.eq("非回环时确认已落地提案不改状态",
+             c.post(f"{api}/proposals/{landed['proposal_id']}/decision", headers=a,
+                    json={"decision": "approve"}).status_code, 200)
+        t.eq("非回环时同样零外发", len(hijack.calls), 0)
+    finally:
+        base.settings.mac_node_url = original_url
+    base.agent = AgentRuntime(db=base.db, settings=base.settings, sender=build_sender(svc), node_transport=node)
+    t.eq("恢复配置后节点仍是回环", c.get(f"{api}/node", headers=a).json()["node"]["loopback"], True)
+    t.eq("恢复配置后基址回来了", c.get(f"{api}/node", headers=a).json()["node"]["base_url"],
+         DEFAULT_MAC_NODE_URL)
+
+    # ------------------------------------------------------------ 门户关闭时
+    offstack = h.stack(tag="agent-console-guestoff", GUEST_ENABLED="0")
+    off_client, _ = h.client(offstack)
+    off_summary = off_client.get(f"{api}/summary", headers=a).json()
+    t.eq("关闭门户时摘要如实标注", off_summary["guest"]["enabled"], False)
+    t.eq("关闭门户时如实标注未启用", off_summary["guest"]["enabled"], False)
+    t.eq("关闭门户时基址仍只是本机", off_summary["guest"]["public_base"], "http://127.0.0.1:8090")
+    t.eq("关闭后列表路由 404", off_client.get(f"{api}/guest/links", headers=a).status_code, 404)
+    t.eq("关闭后签发 404", off_client.post(f"{api}/guest/links", headers=a,
+                            json={"bot_id": "any"}).status_code, 404)
+    t.eq("关闭后取链接 404", off_client.post(f"{api}/guest/links/gl_x/url", headers=a,
+                              json={"bot_id": "any"}).status_code, 404)
+    t.eq("关闭后吊销 404", off_client.post(f"{api}/guest/links/gl_x/revoke", headers=a,
+                            json={"bot_id": "any"}).status_code, 404)
+    t.eq("关闭后访客页 404", off_client.get("/book/whatever").status_code, 404)
+    t.check("关闭页不泄露开关名", "GUEST_ENABLED" not in off_client.get("/book/whatever").text,
+            off_client.get("/book/whatever").text[:120])
+    t.eq("关闭门户不影响其余面板",
+         [off_client.get(f"{api}/{name}", headers=a).status_code for name in ("summary", "engine", "node")],
+         [200, 200, 200])
+    t.eq("关闭门户不影响管理鉴权", off_client.get(f"{api}/summary").status_code, 401)
+
+    # -------------------------------------------------------------- 面板装配
+    page_html = c.get("/").text
+    for marker in ('data-view="agent"', 'data-view="guest"', 'data-view="a2a"',
+                   'id="v-agent"', 'id="v-guest"', 'id="v-a2a"', '"' + AGENT_API_PREFIX + '"',
+                   'id="f-extract"', 'id="f-guest"', 'id="f-neg"', 'id="t-panel"'):
+        t.check(f"页面含 {marker}", marker in page_html, marker)
+    panel_keys = ("nav_agent", "nav_guest", "nav_a2a", "agent_prefs", "guest_issue", "a2a_audit")
+    en_admin = admin_strings("en")
+    for key in panel_keys:
+        t.check(f"面板键 {key} 已入英文目录", key in en_admin, sorted(en_admin)[:6])
+    t.eq("面板键在全部 18 语种都有译文",
+         [f"{loc}/{key}" for key in panel_keys for loc in LOCALES
+          if not str(CATALOGS["admin"][loc].get(key, "")).strip()], [])
+    t.eq("面板键都在页面上被用到", [key for key in panel_keys if f'data-i18n="{key}"' not in page_html], [])
+
+
+def _external_group(module: str, key: str) -> Callable[[SelfTest, Harness], None]:
+    """延迟导入外部自检模块的分组。
+
+    ``selftest_node`` 之类要反向 ``from .selftest import Harness``，顶层互 import 会成环；
+    导入失败会让这一组显式失败，而不是悄悄少跑一组。
+    """
+
+    def runner(test: SelfTest, harness: Harness) -> None:
+        import importlib
+
+        getattr(importlib.import_module(f".{module}", __package__), "GROUPS")[key](test, harness)
+
+    return runner
+
+
 SELF_TEST_GROUPS: Dict[str, Callable[[SelfTest, Harness], None]] = {
     "config": group_config,
     "database": group_database,
+    "agent_ledger": group_agent_ledger,
     "ws_protocol": group_ws_protocol,
     "supervisor": group_supervisor,
     "provisioning": group_provisioning,
@@ -3860,7 +5241,14 @@ SELF_TEST_GROUPS: Dict[str, Callable[[SelfTest, Harness], None]] = {
     "i18n": group_i18n,
     "web_live": group_web_live,
     "bundle": group_bundle,
+    "eco_cards": group_eco_cards,
+    "ics": group_ics,
     "install": group_install,
+    "mac_node": _external_group("selftest_node", "mac_node"),
+    "a2a": _external_group("selftest_node", "a2a"),
+    "guest_portal": _external_group("selftest_guest", "guest_portal"),
+    "agent_engine": _external_group("selftest_agent_engine", "agent_engine"),
+    "agent_console": group_agent_console,
 }
 
 

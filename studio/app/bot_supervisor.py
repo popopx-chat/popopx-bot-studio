@@ -760,6 +760,22 @@ class BotSupervisor:
             "events": [event.as_dict() for event in events],
         }
 
+    def shared_file(self, bot_id: str, file_path: str | Path) -> str:
+        """把插件给的文件路径收敛到该 Bot 自己的 ``files`` 目录里。
+
+        ``/_send`` 的 ``filePath`` 是一个「读取本机任意路径并外发」的原语，所以这一层
+        必须替身机器人自己把范围锁死：绝对路径、软链接、上级目录都在 ``resolve`` 之后
+        重新判定，只有落在 ``paths_for(bot_id).files_dir`` 之下的普通文件才允许通过。
+        """
+        root = self.paths_for(bot_id).files_dir
+        wanted = Path(str(file_path))
+        if not wanted.is_absolute():
+            wanted = root / wanted
+        resolved = wanted.resolve()
+        if not resolved.is_file() or root.resolve() not in resolved.parents:
+            raise BotSupervisorError(f"只能发送该 Bot files 目录下的普通文件，拒绝 {file_path!r}")
+        return str(resolved)
+
     async def send_content(
         self,
         bot_id: str,
@@ -767,10 +783,14 @@ class BotSupervisor:
         content: Dict[str, Any],
         *,
         quoted_item_id: Optional[int] = None,
+        file_path: str = "",
     ) -> Dict[str, Any]:
         chat_type, chat_id = parse_chat_ref(chat_ref)
-        payload = await self.client_for(bot_id).send_content(chat_type, chat_id, content, quoted_item_id=quoted_item_id)
-        return {"bot_id": bot_id, "chat_type": chat_type, "chat_ref": chat_ref, "resp": payload}
+        source = self.shared_file(bot_id, file_path) if file_path else ""
+        payload = await self.client_for(bot_id).send_content(
+            chat_type, chat_id, content, quoted_item_id=quoted_item_id, file_path=source
+        )
+        return {"bot_id": bot_id, "chat_type": chat_type, "chat_ref": chat_ref, "resp": payload, "file": source}
 
     async def broadcast_group(self, bot_id: str, group_ids: Sequence[Any], text: str) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []

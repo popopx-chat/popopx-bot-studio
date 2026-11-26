@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
+from urllib.parse import urlsplit
 
 from .i18n import FALLBACK_LOCALE, normalize_locale
 
@@ -20,11 +22,16 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_CLI_BIN_PATH = "/usr/local/bin/popopx-cli"
 DEFAULT_WS_PORT_BASE = 5230
 DEFAULT_CLI_WS_PORT_MAX = 5299
+DEFAULT_MAC_NODE_PORT = 18920
+DEFAULT_MAC_NODE_URL = f"http://127.0.0.1:{DEFAULT_MAC_NODE_PORT}"
+DEFAULT_GUEST_TTL_HOURS = 72
 SECURE_FILE_MODE = 0o600
 SECURE_DIR_MODE = 0o700
 
 _ENV_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
+_UNSAFE_ID = re.compile(r"[^A-Za-z0-9_.-]+")
 _LOOPBACK_NAMES = {"localhost", "::1", "ip6-localhost", "ip6-loopback"}
+_TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
 class ConfigError(RuntimeError):
@@ -89,11 +96,39 @@ def is_loopback_host(host: str) -> bool:
     return False
 
 
+def is_loopback_http_url(url: str) -> bool:
+    """True only for ``http(s)`` URLs whose host is loopback.
+
+    The Mac Node connector uses this as its SSRF gate: anything that is not a
+    literal loopback name or address is refused before a socket is opened.
+    """
+    candidate = str(url or "").strip()
+    if not candidate:
+        return False
+    parts = urlsplit(candidate)
+    if parts.scheme.lower() not in {"http", "https"} or not parts.netloc:
+        return False
+    if parts.username or parts.password:
+        return False
+    host = parts.hostname or ""
+    return is_loopback_host(host)
+
+
 def mode_of(path: Path) -> Optional[int]:
     try:
         return stat.S_IMODE(path.stat().st_mode)
     except OSError:
         return None
+
+
+def bot_dir_name(bot_id: str) -> str:
+    """Sanitize a Bot identifier before it becomes a directory name.
+
+    ``bot_id`` normally comes from :func:`app.database.new_bot_id` and is already
+    safe, but the agent modules hand this straight to ``mkdir``.
+    """
+    cleaned = _UNSAFE_ID.sub("_", str(bot_id or "").strip())[:80].strip(".")
+    return cleaned or "default"
 
 
 def permission_warnings(
@@ -144,11 +179,83 @@ class Settings:
     default_locale: str = "en"
     env_file: Optional[Path] = None
     allow_lan: bool = False
+    agent_enabled: bool = True
+    needle_asset_dir: Optional[str] = None
+    needle_timeout_seconds: float = 2.0
+    reasoner_enabled: bool = False
+    reasoner_base_url: str = ""
+    reasoner_model: str = ""
+    reasoner_api_key: str = ""
+    reasoner_timeout_seconds: float = 20.0
+    mac_node_enabled: bool = False
+    mac_node_url: str = DEFAULT_MAC_NODE_URL
+    mac_node_token: str = ""
+    mac_node_timeout_seconds: float = 8.0
+    guest_enabled: bool = True
+    guest_secret: str = ""
+    guest_public_base: str = ""
+    guest_default_ttl_hours: int = DEFAULT_GUEST_TTL_HOURS
+    agent_a2a_secret: str = ""
+    meeting_base_url: str = ""
     startup_warnings: List[str] = field(default_factory=list)
 
     @property
     def state_file(self) -> Path:
         return self.data_dir / "studio.state.json"
+
+    @property
+    def guest_key_file(self) -> Path:
+        return self.data_dir / "guest.key"
+
+    @property
+    def a2a_key_file(self) -> Path:
+        return self.data_dir / "a2a.key"
+
+    def _read_key(self, path: Path) -> str:
+        try:
+            return path.read_text(encoding="utf-8").strip() if path.is_file() else ""
+        except OSError:
+            return ""
+
+    def _write_key(self, path: Path, generated: str, label: str) -> str:
+        """0600 独占落盘；并发里晚到者以磁盘上的值为准，绝不各写一份。"""
+        try:
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, SECURE_FILE_MODE)
+            try:
+                os.write(descriptor, generated.encode("utf-8"))
+            finally:
+                os.close(descriptor)
+            os.chmod(path, SECURE_FILE_MODE)
+        except FileExistsError:
+            return self._read_key(path) or generated
+        except OSError as exc:
+            self.startup_warnings.append(f"{label}密钥无法写入 {path}：{exc}，本次运行使用内存密钥")
+        return generated
+
+    def _ensure_key(self, path: Path, label: str) -> str:
+        """密钥只落在数据目录里，不经过管理 API：拿到控制台令牌的人也伪造不了它。"""
+        return self._read_key(path) or self._write_key(path, secrets.token_urlsafe(32), label)
+
+    def ensure_guest_secret(self) -> str:
+        """Return the HMAC key for guest links, creating ``guest.key`` on demand.
+
+        The key never travels through the admin API, so a link survives a restart
+        and cannot be forged by anyone holding only the console token.
+        """
+        if not self.guest_secret:
+            self.guest_secret = self._ensure_key(self.guest_key_file, "访客链接")
+        return self.guest_secret
+
+    def ensure_a2a_secret(self) -> str:
+        """A2A 帧的 HMAC 主密钥，落在独立的 ``a2a.key`` 里。
+
+        与访客令牌分文件：轮换其中一条通道不会让另一条通道的历史签名失效，
+        而 A2A 的按对端密钥就是这把主密钥与对方身份派生出来的（见 :mod:`app.a2a`）。
+        """
+        if not self.agent_a2a_secret:
+            self.agent_a2a_secret = self._ensure_key(self.a2a_key_file, "A2A 协商")
+        return self.agent_a2a_secret
 
     @property
     def db_file(self) -> Path:
@@ -163,13 +270,17 @@ class Settings:
         return self.data_dir / "backups"
 
     def cli_data_dir(self, bot_id: str) -> Path:
-        return self.bots_dir / bot_id / "cli-data"
+        return self.bots_dir / bot_dir_name(bot_id) / "cli-data"
 
     def wrapper_path(self, bot_id: str) -> Path:
-        return self.bots_dir / bot_id / "run-cli.sh"
+        return self.bots_dir / bot_dir_name(bot_id) / "run-cli.sh"
 
     def pid_file(self, bot_id: str) -> Path:
-        return self.bots_dir / bot_id / "cli.pid"
+        return self.bots_dir / bot_dir_name(bot_id) / "cli.pid"
+
+    def agent_dir(self, bot_id: str) -> Path:
+        """Per-Bot 替身机器人隔离目录（偏好规则与协商缓存）。"""
+        return self.bots_dir / bot_dir_name(bot_id) / "agent"
 
     def ensure_directories(self) -> None:
         for directory in (self.data_dir, self.bots_dir, self.backups_dir):
@@ -195,7 +306,20 @@ class Settings:
             ("状态文件", self.state_file if self.state_file.exists() else None),
             ("SQLite 密钥文件", self.data_dir / "studio.key" if (self.data_dir / "studio.key").exists() else None),
         ]
-        return permission_warnings(pairs)
+        if self.guest_key_file.exists():
+            pairs.append(("访客链接密钥文件", self.guest_key_file))
+        if self.a2a_key_file.exists():
+            pairs.append(("A2A 协商密钥文件", self.a2a_key_file))
+        findings = permission_warnings(pairs)
+        if self.bots_dir.is_dir():
+            # 目录位是 0710/0700 级别，用 0600 去比对会把 x 位误报成越权。
+            findings.extend(
+                permission_warnings(
+                    ((f"替身机器人隔离目录 {path.name}", path) for path in sorted(self.bots_dir.glob("*/agent"))),
+                    expected=SECURE_DIR_MODE,
+                )
+            )
+        return findings
 
 
 def _int_env(env: Dict[str, str], key: str, default: int) -> int:
@@ -206,6 +330,26 @@ def _int_env(env: Dict[str, str], key: str, default: int) -> int:
         return int(str(raw).strip())
     except ValueError as exc:
         raise ConfigError(f"{key} 必须是整数，当前值 {raw!r}") from exc
+
+
+def _bool_env(env: Dict[str, str], key: str, default: bool) -> bool:
+    raw = env.get(key)
+    if raw is None or str(raw).strip() == "":
+        return default
+    return str(raw).strip().lower() in _TRUE_VALUES
+
+
+def _float_env(env: Dict[str, str], key: str, default: float, *, minimum: float, maximum: float) -> float:
+    raw = env.get(key)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        value = float(str(raw).strip())
+    except ValueError as exc:
+        raise ConfigError(f"{key} 必须是数字，当前值 {raw!r}") from exc
+    if not minimum <= value <= maximum:
+        raise ConfigError(f"{key}={value} 超出允许范围 {minimum}–{maximum}")
+    return value
 
 
 def load_settings(
@@ -243,6 +387,24 @@ def load_settings(
     raw_locale = (env.get("STUDIO_LOCALE") or "").strip()
     locale = normalize_locale(raw_locale) or FALLBACK_LOCALE
 
+    mac_node_url = (env.get("MAC_NODE_URL") or DEFAULT_MAC_NODE_URL).strip() or DEFAULT_MAC_NODE_URL
+    mac_node_enabled = _bool_env(env, "MAC_NODE_ENABLED", False)
+    if mac_node_enabled and not is_loopback_http_url(mac_node_url):
+        # 桥接器持有 Mac Node 令牌，指向非回环地址等于把令牌外送，一律拒绝启动。
+        raise ConfigError(
+            f"MAC_NODE_URL={mac_node_url} 非回环地址；Mac Node 桥只允许 "
+            "http://127.0.0.1:18920 或 http://localhost:18920"
+        )
+    reasoner_base_url = (env.get("REASONER_BASE_URL") or "").strip()
+    if reasoner_base_url:
+        parts = urlsplit(reasoner_base_url)
+        plain_remote = parts.scheme == "http" and not is_loopback_host(parts.hostname or "")
+        if parts.scheme not in {"http", "https"} or not parts.netloc or plain_remote:
+            raise ConfigError(
+                f"REASONER_BASE_URL={reasoner_base_url} 无效：明文 http 只允许回环地址，"
+                "远端推理服务必须使用 https"
+            )
+
     settings = Settings(
         host=host,
         port=port,
@@ -255,6 +417,30 @@ def load_settings(
         default_locale=locale,
         env_file=resolved_env_file if resolved_env_file and resolved_env_file.is_file() else None,
         allow_lan=allow_lan,
+        agent_enabled=_bool_env(env, "AGENT_ENABLED", True),
+        needle_asset_dir=(env.get("NEEDLE3_ASSET_DIR") or "").strip() or None,
+        needle_timeout_seconds=_float_env(
+            env, "NEEDLE3_TIMEOUT_SECONDS", 2.0, minimum=0.05, maximum=120.0
+        ),
+        reasoner_enabled=_bool_env(env, "REASONER_ENABLED", False),
+        reasoner_base_url=reasoner_base_url,
+        reasoner_model=(env.get("REASONER_MODEL") or "").strip(),
+        reasoner_api_key=(env.get("REASONER_API_KEY") or "").strip(),
+        reasoner_timeout_seconds=_float_env(
+            env, "REASONER_TIMEOUT_SECONDS", 20.0, minimum=0.5, maximum=300.0
+        ),
+        mac_node_enabled=mac_node_enabled,
+        mac_node_url=mac_node_url,
+        mac_node_token=(env.get("MAC_NODE_TOKEN") or "").strip(),
+        mac_node_timeout_seconds=_float_env(
+            env, "MAC_NODE_TIMEOUT_SECONDS", 8.0, minimum=0.2, maximum=120.0
+        ),
+        guest_enabled=_bool_env(env, "GUEST_ENABLED", True),
+        guest_secret=(env.get("GUEST_SECRET") or "").strip(),
+        guest_public_base=(env.get("GUEST_PUBLIC_BASE_URL") or "").strip(),
+        guest_default_ttl_hours=_int_env(env, "GUEST_DEFAULT_TTL_HOURS", DEFAULT_GUEST_TTL_HOURS),
+        agent_a2a_secret=(env.get("AGENT_A2A_SECRET") or "").strip(),
+        meeting_base_url=(env.get("AGENT_MEETING_BASE_URL") or "").strip(),
     )
     if raw_locale and locale != raw_locale:
         settings.startup_warnings.append(
@@ -269,5 +455,17 @@ def load_settings(
         settings.startup_warnings.append(
             f"未找到 CLI 二进制 {settings.cli_bin_path}：Bot 生命周期操作将降级为离线模式，"
             "请运行 install_ubuntu22.sh / install_macos.sh 或设置 CLI_BIN_PATH"
+        )
+    if settings.guest_enabled and not settings.guest_secret:
+        settings.startup_warnings.append(
+            f"未设置 GUEST_SECRET：访客一次性链接将使用 {settings.guest_key_file} 中自动生成的密钥"
+        )
+    if settings.reasoner_enabled and not settings.reasoner_base_url:
+        settings.startup_warnings.append(
+            "REASONER_ENABLED=1 但未设置 REASONER_BASE_URL：话术生成将只用模板回退"
+        )
+    if settings.agent_enabled and not settings.mac_node_enabled:
+        settings.startup_warnings.append(
+            "MAC_NODE_ENABLED 未开启：日历落地（创建/改期/取消）只生成待确认卡片，不会写入 Mac 日历"
         )
     return settings

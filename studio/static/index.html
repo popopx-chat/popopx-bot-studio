@@ -187,6 +187,9 @@ details.cfg[open]>summary::before{content:"− "}
     <li><button type="button" data-view="plugins"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M5 1v3H3v5h2v4h4v-4h2V4h-2V1z"/></svg><span data-i18n="nav_plugins">Plugins</span></button></li>
     <li><button type="button" data-view="api"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 3h5v2H2zm0 4h3v2H2zm6-4h6v2H8zm0 8h6v2H8zM2 11h5v2H2z"/></svg><span data-i18n="nav_api">API console</span></button></li>
     <li><button type="button" data-view="backup"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 2h12v3H2zm1 4h10v8H3zm3 2v2h4V8z"/></svg><span data-i18n="nav_backup">Cold backup</span></button></li>
+    <li><button type="button" data-view="agent"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.4" d="M3 4h10v8H3z"/><path fill="currentColor" d="M6 7h1v2H6zm3 0h1v2H9zM7 1h2v2H7z"/></svg><span data-i18n="nav_agent">Stand-in agent</span></button></li>
+    <li><button type="button" data-view="guest"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 2h12v4H2zm0 6h5v6H2zm7 0h7v2H9zm0 4h7v2H9z"/></svg><span data-i18n="nav_guest">Guest booking</span></button></li>
+    <li><button type="button" data-view="a2a"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.4" d="M2 4h5v8H2zm7 0h5v8H9zM7 8h2"/></svg><span data-i18n="nav_a2a">Scheduling audit</span></button></li>
   </ul>
   <div class="railfoot"><span data-i18n="footer">AGPL-3.0-only · no bundled binaries · loopback only</span></div>
 </nav>
@@ -453,6 +456,172 @@ details.cfg[open]>summary::before{content:"− "}
   </div>
 </section>
 
+<section id="v-agent" hidden aria-labelledby="h-agent">
+  <div class="hd"><h1 id="h-agent" data-i18n="nav_agent">Stand-in agent</h1><span class="sp mono" id="ag-stamp"></span></div>
+  <div class="row">
+    <label class="fld" style="min-width:220px"><span>bot_id</span><select id="ag-bot"></select></label>
+    <button type="button" class="btn" id="btn-ag"><span data-i18n="action_refresh">Refresh</span></button>
+  </div>
+  <div class="card sect">
+    <header><h2 data-i18n="agent_engine">Extraction engine</h2><div class="sp">
+      <span class="pill" id="ag-engine">engine</span><span class="pill" id="ag-node">mac_node</span>
+      <span class="pill" id="ag-reasoner">reasoner</span></div></header>
+    <div class="bd"><dl class="kv" id="ag-kv"></dl>
+      <div class="row sect">
+        <button type="button" class="btn sm" id="btn-ag-reload"><span data-i18n="agent_reload">Reload weights</span></button>
+        <button type="button" class="btn sm" id="btn-ag-probe"><span data-i18n="agent_probe">Probe node</span></button>
+      </div>
+      <pre id="ag-out" class="sect">—</pre></div>
+  </div>
+  <div class="grid g2 sect">
+    <div class="card">
+      <header><h2 data-i18n="agent_test">Try a sentence</h2><div class="sp"><span class="pill" id="ax-source">—</span></div></header>
+      <div class="bd"><form id="f-extract" class="grid gap">
+        <label class="fld"><span data-i18n="agent_test">Try a sentence</span><textarea id="ax-text" rows="3" placeholder="下周三下午约个 45 分钟的会"></textarea></label>
+        <div class="grid g2 gap">
+          <label class="fld"><span data-i18n="agent_timezone">Timezone</span><input id="ax-tz" class="mono" placeholder="Asia/Shanghai"></label>
+          <label class="fld"><span data-i18n="guest_duration">Meeting length (min)</span><input id="ax-dur" type="number" value="60" min="5" max="480" class="mono"></label>
+        </div>
+        <div class="row"><button type="submit" class="btn pri"><span data-i18n="action_test">Test</span></button></div>
+      </form>
+      <p class="meta" style="margin:12px 0 0" data-i18n="agent_test_note">Extraction only — nothing is written to the calendar.</p>
+      <pre id="ax-out" class="sect">—</pre></div>
+    </div>
+    <div class="card">
+      <header><h2 data-i18n="agent_tools">Tool calls</h2><div class="sp"><span class="pill" id="ag-tools-n">tools: 0</span></div></header>
+      <div class="bd"><ul class="list" id="ag-tools"></ul>
+        <dl class="kv sect" id="ag-asset"></dl>
+        <p class="meta sect">GET /api/agent/engine · POST /api/agent/engine {action:load|reload|unload}</p></div>
+    </div>
+  </div>
+  <div class="card sect">
+    <header><h2 data-i18n="agent_prefs">Preference rules</h2><div class="sp"><span class="pill" id="pf-mode">file</span></div></header>
+    <div class="bd"><form id="f-prefs" class="grid gap">
+      <div class="grid g3 gap">
+        <label class="fld"><span data-i18n="agent_timezone">Timezone</span><input id="pf-tz" class="mono" placeholder="Asia/Shanghai"></label>
+        <label class="fld"><span data-i18n="agent_working_hours">Working hours</span>
+          <span class="row"><input id="pf-start" type="time" value="09:00" class="mono"><input id="pf-end" type="time" value="18:00" class="mono"></span></label>
+        <label class="fld"><span data-i18n="agent_buffers">Buffers (min)</span>
+          <span class="row"><input id="pf-before" type="number" min="0" max="240" value="15" class="mono"><input id="pf-after" type="number" min="0" max="240" value="15" class="mono"></span></label>
+      </div>
+      <div class="grid g2 gap">
+        <div class="fld"><span data-i18n="agent_working_days">Working days</span><div class="row sect" id="pf-days"></div></div>
+        <div class="fld"><span data-i18n="agent_negotiation">Negotiation</span>
+          <div class="row sect">
+            <label class="row" for="pf-auto"><input type="checkbox" id="pf-auto"><span class="meta">auto_confirm</span></label>
+            <label class="row" for="pf-approve"><input type="checkbox" id="pf-approve" checked><span class="meta">require_owner_approval</span></label>
+          </div>
+          <span class="row">
+            <input id="pf-rounds" type="number" min="1" max="9" value="3" class="mono" data-i18n-attr="title:agent_negotiation">
+            <input id="pf-window" type="number" min="1" max="60" value="14" class="mono" data-i18n-attr="title:agent_negotiation">
+          </span>
+        </div>
+      </div>
+      <div class="grid g2 gap">
+        <label class="fld"><span data-i18n="agent_tone">Reply tone</span><select id="pf-tone">
+          <option value="concise">concise</option><option value="formal">formal</option>
+          <option value="friendly">friendly</option><option value="terse">terse</option></select></label>
+        <label class="fld"><span data-i18n="agent_sign_off">Sign-off line</span><input id="pf-sign" data-i18n-attr="placeholder:agent_sign_off"></label>
+      </div>
+      <dl class="kv" id="pf-summary"></dl>
+      <div class="row">
+        <button type="submit" class="btn pri"><span data-i18n="action_save">Save</span></button>
+        <button type="button" class="btn dgr" id="btn-pf-reset"><span data-i18n="agent_reset">Reset preferences</span></button>
+      </div>
+    </form></div>
+  </div>
+</section>
+
+<section id="v-guest" hidden aria-labelledby="h-guest">
+  <div class="hd"><h1 id="h-guest" data-i18n="nav_guest">Guest booking</h1><span class="sp mono" id="gs-stamp"></span></div>
+  <div class="row">
+    <label class="fld" style="min-width:220px"><span>bot_id</span><select id="gs-bot"></select></label>
+    <label class="row" for="gs-expired"><input type="checkbox" id="gs-expired"><span class="meta">include_expired</span></label>
+    <button type="button" class="btn" id="btn-gs"><span data-i18n="action_refresh">Refresh</span></button>
+  </div>
+  <div class="grid g2 sect">
+    <div class="card">
+      <header><h2 data-i18n="guest_issue">Create link</h2></header>
+      <div class="bd"><form id="f-guest" class="grid gap">
+        <label class="fld"><span data-i18n="guest_label">Link label</span><input id="g-label" data-i18n-attr="placeholder:guest_label"></label>
+        <label class="fld"><span data-i18n="guest_topic">Topic</span><input id="g-topic" data-i18n-attr="placeholder:guest_topic"></label>
+        <div class="grid g3 gap">
+          <label class="fld"><span data-i18n="guest_ttl">Valid for (hours)</span><input id="g-ttl" type="number" min="1" max="720" value="72" class="mono"></label>
+          <label class="fld"><span data-i18n="guest_uses">Visits</span><input id="g-uses" type="number" min="1" max="1000" value="1" class="mono"></label>
+          <label class="fld"><span data-i18n="guest_duration">Meeting length (min)</span><input id="g-dur" type="number" min="5" max="480" value="60" class="mono"></label>
+        </div>
+        <label class="fld"><span data-i18n="agent_timezone">Timezone</span><input id="g-tz" class="mono" placeholder="Asia/Shanghai"></label>
+        <div class="row"><button type="submit" class="btn pri"><span data-i18n="guest_issue">Create link</span></button></div>
+      </form>
+      <div class="row sect" id="g-urlrow" hidden>
+        <span class="meta" data-i18n="guest_url">One-time link</span>
+        <input id="g-url" class="mono" readonly>
+        <button type="button" class="btn sm" id="btn-g-copy"><span data-i18n="action_copy">Copy</span></button>
+      </div></div>
+    </div>
+    <div class="card">
+      <header><h2>GET /api/agent/guest/links</h2><div class="sp"><span class="pill" id="gs-stats">stats</span></div></header>
+      <div class="bd"><div style="overflow-x:auto"><table>
+        <thead><tr><th>link_id</th><th><span data-i18n="guest_label">Link label</span></th>
+          <th><span data-i18n="field_status">Status</span></th><th><span data-i18n="guest_uses">Visits</span></th>
+          <th><span data-i18n="guest_expires">Expires</span></th><th><span data-i18n="guest_url">One-time link</span></th></tr></thead>
+        <tbody id="gs-rows"></tbody>
+      </table></div>
+      <div id="gs-empty" hidden><p class="empty" data-i18n="guest_empty">No guest links yet.</p></div></div>
+    </div>
+  </div>
+</section>
+
+<section id="v-a2a" hidden aria-labelledby="h-a2a">
+  <div class="hd"><h1 id="h-a2a" data-i18n="nav_a2a">Scheduling audit</h1><span class="sp mono" id="a2-stamp"></span></div>
+  <div class="row">
+    <label class="fld" style="min-width:220px"><span>bot_id</span><select id="a2-bot"></select></label>
+    <label class="fld"><span data-i18n="a2a_stage">Stage</span><select id="a2-stage"></select></label>
+    <button type="button" class="btn" id="btn-a2"><span data-i18n="action_refresh">Refresh</span></button>
+  </div>
+  <div class="grid g2 sect">
+    <div class="card">
+      <header><h2>GET /api/agent/peers</h2><div class="sp"><span class="pill" id="a2-self">self</span></div></header>
+      <div class="bd"><ul class="list" id="a2-peers"></ul>
+        <form id="f-peer" class="grid gap sect">
+          <label class="fld"><span data-i18n="a2a_peer">Peer identity</span><input id="p-id" class="mono" placeholder="popopx1@server.example"></label>
+          <div class="grid g2 gap">
+            <label class="fld"><span>key</span><input id="p-key" class="mono" autocomplete="off" spellcheck="false"></label>
+            <label class="fld"><span data-i18n="guest_label">Link label</span><input id="p-label"></label>
+          </div>
+          <div class="row"><button type="submit" class="btn pri"><span data-i18n="a2a_pair">Pair peer</span></button></div>
+        </form>
+        <p class="meta" style="margin:0">POST /api/agent/peers · /api/agent/peers/remove</p></div>
+    </div>
+    <div class="card">
+      <header><h2 data-i18n="a2a_start">Start negotiation</h2></header>
+      <div class="bd"><form id="f-neg" class="grid gap">
+        <label class="fld"><span data-i18n="a2a_peer">Peer identity</span><input id="n-peer" class="mono" data-i18n-attr="placeholder:a2a_peer"></label>
+        <div class="grid g3 gap">
+          <label class="fld"><span data-i18n="guest_duration">Meeting length (min)</span><input id="n-dur" type="number" min="5" max="480" value="60" class="mono"></label>
+          <label class="fld"><span>days</span><input id="n-days" type="number" min="0" max="30" value="5" class="mono"></label>
+          <label class="fld"><span>owner_tz</span><input id="n-tz" class="mono" placeholder="Asia/Shanghai"></label>
+        </div>
+        <div class="row"><button type="submit" class="btn pri"><span data-i18n="a2a_start">Start negotiation</span></button></div>
+      </form><pre id="n-out" class="sect">—</pre>
+      <p class="meta sect">POST /api/agent/negotiate · masked slots only, never a full calendar</p></div>
+    </div>
+  </div>
+  <div class="card sect">
+    <header><h2 data-i18n="a2a_proposals">Proposals</h2><div class="sp"><span class="pill" id="a2-funnel">funnel</span></div></header>
+    <div class="bd"><div style="overflow-x:auto"><table>
+      <thead><tr><th>proposal_id</th><th><span data-i18n="field_status">Status</span></th><th>start · end</th>
+        <th><span data-i18n="guest_duration">Meeting length (min)</span></th><th>source</th><th>decide</th></tr></thead>
+      <tbody id="pr-rows"></tbody>
+    </table></div>
+    <div id="pr-empty" hidden><p class="empty" data-i18n="a2a_empty">No audit events yet.</p></div></div>
+  </div>
+  <div class="card sect">
+    <header><h2 data-i18n="a2a_audit">Audit trail</h2><div class="sp"><button type="button" class="btn sm" id="btn-a2-audit"><span data-i18n="action_refresh">Refresh</span></button></div></header>
+    <div class="bd"><div id="a2-flow"></div><pre id="a2-out" class="sect">—</pre></div>
+  </div>
+</section>
+
 </main>
 </div>
 </div>
@@ -496,6 +665,15 @@ details.cfg[open]>summary::before{content:"− "}
     </div>
   </form>
 </dialog>
+
+<template id="t-panel">
+  <div class="row">
+    <span class="meta" data-i18n="a2a_unpair">Unpair</span>
+    <span class="meta" data-i18n="a2a_approve">Approve</span>
+    <span class="meta" data-i18n="a2a_decline">Decline</span>
+    <span class="meta" data-i18n="guest_revoke">Revoke</span>
+  </div>
+</template>
 
 <template id="t-toast">
   <div class="toast" role="status">
@@ -761,7 +939,7 @@ details.cfg[open]>summary::before{content:"− "}
   /* ================================================================ state */
   var S = { token: "", view: "dashboard", bots: [], runtime: [], overview: null, config: null,
             rules: [], commands: [], routing: [], groups: [], plugins: null, backups: [],
-            pendingDelete: null, qrLink: "" };
+            agent: null, prefs: null, links: [], pendingDelete: null, qrLink: "" };
 
   function readToken() { try { return localStorage.getItem(LS_TOK) || ""; } catch (e) { return ""; } }
   function saveToken(v) {
@@ -920,6 +1098,9 @@ details.cfg[open]>summary::before{content:"− "}
       botOptions(get("rt-bot"), false);
       botOptions(get("pl-bot"), true);
       botOptions(get("x-bot"), false);
+      botOptions(get("ag-bot"), true);
+      botOptions(get("gs-bot"), true);
+      botOptions(get("a2-bot"), true);
       if (S.bots.length) pickBot(S.bots[0].id);
       return d;
     }).catch(guard());
@@ -1288,6 +1469,257 @@ details.cfg[open]>summary::before{content:"− "}
     }).catch(guard());
   }
 
+  /* =================================================== 8 stand-in agent */
+  var AGENT_API = "/api/agent";
+  var STAGES = [];
+
+  function agentBot() { return get("ag-bot").value; }
+  function guestBot() { return get("gs-bot").value; }
+  function a2Bot() { return get("a2-bot").value; }
+
+  function kvRows(node, pairs) {
+    node.textContent = "";
+    pairs.forEach(function (pair) {
+      var v = pair[1];
+      node.appendChild(el("dt", null, pair[0]));
+      node.appendChild(el("dd", null, (v === null || v === undefined || v === "") ? "—" : String(v)));
+    });
+  }
+  function objRows(obj, keys) {
+    var src = obj || {}, out = [];
+    (keys || Object.keys(src)).forEach(function (k) { out.push([k, src[k]]); });
+    return out;
+  }
+  function objText(obj) {
+    var src = obj || {}, parts = [];
+    Object.keys(src).forEach(function (k) { parts.push(k + ":" + num(src[k])); });
+    return parts.join(" · ") || "—";
+  }
+  function pill(node, label, ok) {
+    node.textContent = label;
+    node.className = "pill" + (ok === undefined ? "" : (ok ? " acc" : " warn"));
+  }
+  function fillStageSelect() {
+    var sel = get("a2-stage"), keep = sel.value;
+    sel.textContent = "";
+    sel.appendChild(new Option("all stages", ""));
+    STAGES.forEach(function (name) { sel.appendChild(new Option(name, name)); });
+    if (keep) sel.value = keep;
+  }
+
+  function loadAgent() {
+    var id = agentBot();
+    return api(AGENT_API + "/summary" + (id ? "?bot_id=" + encodeURIComponent(id) : "")).then(function (d) {
+      S.agent = d;
+      STAGES = d.stages || STAGES;
+      var rt = d.runtime || {}, nl = rt.needle || {}, rs = rt.reasoner || {};
+      var nd = d.node || rt.mac_node || {}, bot = d.bot || {}, gs = d.guest || {};
+      pill(get("ag-engine"), String(nl.engine || "—"), !nl.degraded);
+      pill(get("ag-node"), nd.enabled ? (nd.loopback ? "mac_node: loopback" : "mac_node: refused") : "mac_node: off",
+           !!nd.enabled && !!nd.loopback);
+      pill(get("ag-reasoner"), rs.model ? String(rs.model) : "reasoner: off", !!rs.usable);
+      kvRows(get("ag-kv"), [
+        ["plugin_id", rt.plugin_id], ["enabled", bot.enabled], ["owner_chat", bot.owner_chat],
+        ["locale", bot.locale], ["timezone", bot.timezone],
+        ["counts", json(rt.counts || {})], ["errors", (rt.errors || []).length],
+        ["base_url", nd.base_url], ["token", nd.token], ["timeout_seconds", nl.timeout_seconds],
+        ["prefix", gs.prefix], ["public_base", gs.public_base], ["guest_enabled", gs.enabled]
+      ]);
+      get("ag-out").textContent = json({ funnel: d.funnel, guest: gs, links: bot.links,
+                                        negotiations: bot.negotiations, proposals: bot.proposals });
+      kvRows(get("ag-asset"), objRows(nl, ["asset_ok", "asset_bytes", "asset_sha256", "weights_path",
+        "sdk_available", "sdk_note", "external_engine", "load_error", "degraded_reason", "unload_error",
+        "extractions", "needle_extractions", "fallback_extractions", "truncated_inputs"]));
+      var tools = nl.tools || [], list = get("ag-tools");
+      get("ag-tools-n").textContent = "tools: " + num(tools.length);
+      list.textContent = "";
+      tools.forEach(function (name) {
+        var row = el("div", "flow");
+        row.append(el("span", "node", name), el("span", "meta", "POST /api/agent/extract"));
+        list.appendChild(row);
+      });
+      get("ag-stamp").textContent = hhmmss(Date.now() / 1000);
+      fillStageSelect();
+      loadPrefs(id);
+      return d;
+    }).catch(guard());
+  }
+
+  function loadPrefs(id) {
+    if (!id) return Promise.resolve();
+    return api(AGENT_API + "/prefs/" + encodeURIComponent(id)).then(function (d) {
+      var p = d.preferences || {}, s = d.summary || {};
+      var wh = p.working_hours || {}, bu = p.buffers || {}, ng = p.negotiation || {}, cp = p.copy || {};
+      S.prefs = p;
+      get("pf-tz").value = String(p.timezone || "");
+      get("pf-start").value = String(wh.start || "09:00");
+      get("pf-end").value = String(wh.end || "18:00");
+      get("pf-before").value = num(bu.before_minutes);
+      get("pf-after").value = num(bu.after_minutes);
+      get("pf-rounds").value = num(ng.rounds);
+      get("pf-window").value = num(ng.window_days);
+      get("pf-auto").checked = !!ng.auto_confirm;
+      get("pf-approve").checked = ng.require_owner_approval !== false;
+      get("pf-tone").value = String(cp.tone || "concise");
+      get("pf-sign").value = String(cp.sign_off || "");
+      renderDays(wh.days || []);
+      get("pf-mode").textContent = String(s.mode || "file");
+      kvRows(get("pf-summary"), [
+        ["path", s.path], ["working_hours", s.working_hours], ["locale", s.locale],
+        ["blocked_periods", s.blocked_periods], ["boost_terms", s.boost_terms],
+        ["block_terms", s.block_terms], ["buffers", json(s.buffers || {})],
+        ["meeting", json(s.meeting || {})], ["negotiation", json(s.negotiation || {})],
+        ["updated_at", hhmmss(s.updated_at)], ["recovered_from", s.recovered_from]
+      ]);
+      return d;
+    }).catch(guard());
+  }
+
+  /* ISO weekdays 1=Mon … 7=Sun, labelled with the console's own locale so the
+     form reads like the rest of the page instead of hard-coding seven new strings. */
+  function renderDays(days) {
+    var box = get("pf-days");
+    box.textContent = "";
+    for (var i = 1; i <= 7; i++) {
+      var id = "pf-d" + i, probe = new Date(Date.UTC(2026, 0, 4 + i)), label = "D" + i;
+      try {
+        label = new Intl.DateTimeFormat(cur, { weekday: "short", timeZone: "UTC" }).format(probe);
+      } catch (e) { label = "D" + i; }
+      var input = el("input");
+      input.type = "checkbox"; input.id = id; input.value = String(i);
+      input.checked = (days || []).indexOf(i) >= 0;
+      var wrap = el("label", "row");
+      wrap.htmlFor = id;
+      wrap.append(input, el("span", "meta", label));
+      box.appendChild(wrap);
+    }
+  }
+  function pickedDays() {
+    var out = [];
+    for (var i = 1; i <= 7; i++) { var n = get("pf-d" + i); if (n && n.checked) out.push(i); }
+    return out;
+  }
+
+  /* =================================================== 9 guest booking */
+  function loadGuest() {
+    var id = guestBot(), q = [];
+    if (id) q.push("bot_id=" + encodeURIComponent(id));
+    if (get("gs-expired").checked) q.push("include_expired=1");
+    return api(AGENT_API + "/guest/links" + (q.length ? "?" + q.join("&") : "")).then(function (d) {
+      S.links = d.links || [];
+      get("gs-stamp").textContent = num(S.links.length) + " × guest_links";
+      pill(get("gs-stats"), objText(d.stats || {}));
+      var body = get("gs-rows");
+      body.textContent = "";
+      get("gs-empty").hidden = S.links.length > 0;
+      S.links.forEach(function (l) {
+        var tr = el("tr");
+        tr.appendChild(el("td", "mono", String(l.link_id || "").slice(0, 8)));
+        tr.appendChild(el("td", null, [l.label, l.topic].filter(Boolean).join(" · ") || "—"));
+        tr.appendChild(el("td")).appendChild(st(String(l.status || "active"), String(l.status || "active")));
+        tr.appendChild(el("td", "mono", num(l.uses) + " / " + num(l.max_uses)));
+        tr.appendChild(el("td", "mono", hhmmss(l.expires_at)));
+        var acts = el("td", "row");
+        acts.appendChild(btn(t("action_copy"), "sm", function () {
+          api(AGENT_API + "/guest/links/" + encodeURIComponent(l.link_id) + "/url",
+              { method: "POST", body: { bot_id: l.bot_id || id } })
+            .then(function (r) { copy(((r && r.link) || {}).url || ""); });
+        }));
+        acts.appendChild(btn(t("guest_revoke"), "sm dgr", function () {
+          api(AGENT_API + "/guest/links/" + encodeURIComponent(l.link_id) + "/revoke",
+              { method: "POST", body: { bot_id: l.bot_id || id } })
+            .then(function () { toast(t("msg_saved"), "link " + String(l.link_id || "").slice(0, 8)); loadGuest(); })
+            .catch(guard());
+        }));
+        tr.appendChild(acts);
+        body.appendChild(tr);
+      });
+      return d;
+    }).catch(guard());
+  }
+
+  /* =================================================== 10 a2a audit */
+  function loadA2A() {
+    loadPeers(a2Bot());
+    loadProposals();
+    return loadAudit();
+  }
+
+  function loadPeers(id) {
+    if (!id) { get("a2-peers").textContent = ""; return Promise.resolve(); }
+    return api(AGENT_API + "/peers?bot_id=" + encodeURIComponent(id)).then(function (d) {
+      var peers = d.peers || [], list = get("a2-peers");
+      get("a2-self").textContent = "self: " + String(d.self_identity || "—");
+      list.textContent = "";
+      if (!peers.length) list.appendChild(el("p", "meta", "peers: 0"));
+      peers.forEach(function (p) {
+        var row = el("div", "flow");
+        row.append(el("span", "node", p.identity),
+          el("span", "meta", [p.label, p.chat, p.derived ? "derived key" : "paired key"].filter(Boolean).join(" · ")));
+        row.appendChild(btn(t("action_copy"), "sm", function () { copy(p.wire_identity || p.identity); }));
+        row.appendChild(btn(t("a2a_unpair"), "sm dgr", function () {
+          api(AGENT_API + "/peers/remove", { method: "POST", body: { bot_id: id, identity: p.identity } })
+            .then(function () { toast(t("msg_saved"), String(p.identity)); loadPeers(id); })
+            .catch(guard());
+        }));
+        list.appendChild(row);
+      });
+      return d;
+    }).catch(guard());
+  }
+
+  function loadProposals() {
+    var id = a2Bot();
+    return api(AGENT_API + "/proposals" + (id ? "?bot_id=" + encodeURIComponent(id) : "")).then(function (d) {
+      var rows = d.proposals || [], body = get("pr-rows");
+      pill(get("a2-funnel"), objText(d.stats || {}));
+      body.textContent = "";
+      get("pr-empty").hidden = rows.length > 0;
+      rows.forEach(function (p) {
+        var tr = el("tr");
+        tr.appendChild(el("td", "mono", String(p.proposal_id || "").slice(0, 10)));
+        tr.appendChild(el("td")).appendChild(st(String(p.status || "pending"), String(p.status || "pending")));
+        tr.appendChild(el("td", "mono", hhmmss(p.start_ts) + " → " + hhmmss(p.end_ts)));
+        tr.appendChild(el("td", "mono", num(p.duration_minutes)));
+        tr.appendChild(el("td", "mono", [p.source, p.action].filter(Boolean).join(" · ")));
+        var acts = el("td", "row");
+        [["approve", t("a2a_approve"), "sm"], ["decline", t("a2a_decline"), "sm dgr"]].forEach(function (verb) {
+          acts.appendChild(btn(verb[1], verb[2], function () {
+            api(AGENT_API + "/proposals/" + encodeURIComponent(p.proposal_id) + "/decision",
+                { method: "POST", body: { decision: verb[0], chat_ref: p.chat_ref || "" } })
+              .then(function (r) {
+                get("a2-out").textContent = json(r);
+                toast(t("msg_saved"), String(p.proposal_id || "").slice(0, 10) + " · " + verb[0]);
+                loadProposals();
+                loadAudit();
+              }).catch(guard());
+          }));
+        });
+        tr.appendChild(acts);
+        body.appendChild(tr);
+      });
+      return d;
+    }).catch(guard());
+  }
+
+  function loadAudit() {
+    var id = a2Bot(), stage = get("a2-stage").value, q = [];
+    if (id) q.push("bot_id=" + encodeURIComponent(id));
+    if (stage) q.push("stage=" + encodeURIComponent(stage));
+    return api(AGENT_API + "/audit" + (q.length ? "?" + q.join("&") : "")).then(function (d) {
+      var rows = d.audit || [];
+      get("a2-stamp").textContent = num(rows.length) + " × negotiation_audit";
+      get("a2-out").textContent = rows.length ? rows.map(function (r) {
+        return [hhmmss(r.ts), r.level, r.stage, r.event, r.proposal_id || "-",
+          num(r.latency_ms) + "ms", r.detail].join("  ");
+      }).join("\n") : "negotiation_audit: 0";
+      var flow = get("a2-flow");
+      flow.textContent = "";
+      flow.appendChild(el("div", "row", objText(d.funnel || {})));
+      return d;
+    }).catch(guard());
+  }
+
   /* ======================================================= dialogs, views */
   function askDelete(target, then) {
     S.pendingDelete = then;
@@ -1295,7 +1727,8 @@ details.cfg[open]>summary::before{content:"− "}
     openDlg(get("d-del"));
     get("x-cancel").focus();
   }
-  var LOADERS = { dashboard: loadDashboard, bots: loadBots, rules: loadRules, routing: loadRouting, plugins: loadPlugins };
+  var LOADERS = { dashboard: loadDashboard, bots: loadBots, rules: loadRules, routing: loadRouting,
+                  plugins: loadPlugins, agent: loadAgent, guest: loadGuest, a2a: loadA2A };
   function showView(name) {
     S.view = name;
     var secs = document.querySelectorAll(".views > section");
@@ -1336,6 +1769,31 @@ details.cfg[open]>summary::before{content:"− "}
     [["r-bot", loadRules], ["rt-bot", loadRouting], ["pl-bot", loadPlugins]].forEach(function (pair) {
       on(get(pair[0]), "change", pair[1]);
     });
+    [["btn-ag", loadAgent], ["btn-gs", loadGuest], ["btn-a2", loadA2A], ["btn-a2-audit", loadAudit]]
+      .forEach(function (pair) { on(get(pair[0]), "click", pair[1]); });
+    [["ag-bot", loadAgent], ["gs-bot", loadGuest], ["gs-expired", loadGuest], ["a2-bot", loadA2A],
+      ["a2-stage", loadAudit]].forEach(function (pair) { on(get(pair[0]), "change", pair[1]); });
+    on(get("btn-ag-reload"), "click", function () {
+      api(AGENT_API + "/engine", { method: "POST", body: { action: "reload" } }).then(function (d) {
+        get("ag-out").textContent = json(d);
+        toast(t("msg_saved"), "needle · " + String((d.engine || d.needle || {}).engine || ""));
+        loadAgent();
+      }).catch(guard());
+    });
+    on(get("btn-ag-probe"), "click", function () {
+      api(AGENT_API + "/node/probe", { method: "POST", body: {} }).then(function (d) {
+        get("ag-out").textContent = json(d);
+        pill(get("ag-node"), "mac_node: ok", true);
+        toast(t("msg_saved"), String((d.node || {}).base_url || ""));
+      }).catch(guard());
+    });
+    on(get("btn-pf-reset"), "click", function () {
+      var id = agentBot();
+      if (!id) { toast(t("msg_error"), "bot_id", true); return; }
+      api(AGENT_API + "/prefs/" + encodeURIComponent(id) + "/reset", { method: "POST", body: {} })
+        .then(function () { toast(t("msg_saved"), "preferences"); loadPrefs(id); }).catch(guard());
+    });
+    on(get("btn-g-copy"), "click", function () { copy(get("g-url").value); });
     on(get("e-bot"), "change", function () { pickBot(this.value); });
     on(get("btn-curl"), "click", function () { copy(get("a-curl").textContent); });
     ["a-base", "a-token"].forEach(function (id) { on(get(id), "input", renderCurl); });
@@ -1471,6 +1929,92 @@ details.cfg[open]>summary::before{content:"− "}
         loadBots();
       });
     });
+
+    on(get("f-extract"), "submit", function (ev) {
+      ev.preventDefault();
+      var text = get("ax-text").value.trim();
+      if (!text) { toast(t("msg_error"), "text", true); return; }
+      api(AGENT_API + "/extract", { method: "POST", body: {
+        bot_id: agentBot(), text: text, timezone: get("ax-tz").value.trim(),
+        duration_minutes: Number(get("ax-dur").value || 60)
+      } }).then(function (d) {
+        var ex = d.extraction || {};
+        pill(get("ax-source"), "source: " + String(ex.source || "—"), ex.ok !== false);
+        get("ax-out").textContent = json(d);
+      }).catch(guard());
+    });
+
+    on(get("f-prefs"), "submit", function (ev) {
+      ev.preventDefault();
+      var id = agentBot();
+      if (!id) { toast(t("msg_error"), "bot_id", true); return; }
+      var old = S.prefs || {}, wh = old.working_hours || {}, bu = old.buffers || {};
+      var prefs = {
+        timezone: get("pf-tz").value.trim(),
+        working_hours: { days: pickedDays(), start: get("pf-start").value, end: get("pf-end").value,
+                         respect_working_hours: wh.respect_working_hours !== false },
+        buffers: { before_minutes: Number(get("pf-before").value || 0),
+                   after_minutes: Number(get("pf-after").value || 0),
+                   protect_lunch: bu.protect_lunch !== false },
+        negotiation: { rounds: Number(get("pf-rounds").value || 3),
+                       window_days: Number(get("pf-window").value || 14),
+                       auto_confirm: get("pf-auto").checked,
+                       require_owner_approval: get("pf-approve").checked },
+        copy: { tone: get("pf-tone").value, sign_off: get("pf-sign").value.trim() }
+      };
+      api(AGENT_API + "/prefs/" + encodeURIComponent(id), { method: "POST", body: { preferences: prefs } })
+        .then(function (d) {
+          S.prefs = d.preferences || {};
+          toast(t("msg_saved"), "preferences · " + id);
+          get("pf-mode").textContent = String((d.summary || {}).mode || "file");
+        }).catch(guard());
+    });
+
+    on(get("f-guest"), "submit", function (ev) {
+      ev.preventDefault();
+      var id = guestBot();
+      if (!id) { toast(t("msg_error"), "bot_id", true); return; }
+      api(AGENT_API + "/guest/links", { method: "POST", body: {
+        bot_id: id, label: get("g-label").value.trim(), topic: get("g-topic").value.trim(),
+        ttl_hours: Number(get("g-ttl").value || 72), max_uses: Number(get("g-uses").value || 1),
+        duration_minutes: Number(get("g-dur").value || 60), timezone: get("g-tz").value.trim()
+      } }).then(function (d) {
+        var link = d.link || {};
+        get("g-url").value = String(link.url || "");
+        get("g-urlrow").hidden = !link.url;
+        toast(t("msg_saved"), "link " + String(link.link_id || "").slice(0, 8));
+        loadGuest();
+      }).catch(guard());
+    });
+
+    on(get("f-peer"), "submit", function (ev) {
+      ev.preventDefault();
+      var id = a2Bot(), identity = get("p-id").value.trim();
+      if (!id || !identity) { toast(t("msg_error"), "bot_id | identity", true); return; }
+      api(AGENT_API + "/peers", { method: "POST", body: {
+        bot_id: id, identity: identity, key: get("p-key").value.trim(), label: get("p-label").value.trim()
+      } }).then(function (d) {
+        get("p-key").value = "";
+        get("p-id").value = "";
+        toast(t("msg_saved"), String(((d.peer || {}).identity) || identity));
+        loadPeers(id);
+      }).catch(guard());
+    });
+
+    on(get("f-neg"), "submit", function (ev) {
+      ev.preventDefault();
+      var id = a2Bot(), peer = get("n-peer").value.trim();
+      if (!id || !peer) { toast(t("msg_error"), "bot_id | peer", true); return; }
+      api(AGENT_API + "/negotiate", { method: "POST", body: {
+        bot_id: id, peer: peer, duration_minutes: Number(get("n-dur").value || 60),
+        days: Number(get("n-days").value || 0), owner_tz: get("n-tz").value.trim()
+      } }).then(function (d) {
+        get("n-out").textContent = json(d);
+        toast(t("msg_saved"), "negotiation " + String(d.negotiation_id || "").slice(0, 8));
+        loadProposals();
+        loadAudit();
+      }).catch(guard());
+    });
   }
 
   /* ================================================================== boot */
@@ -1493,12 +2037,14 @@ details.cfg[open]>summary::before{content:"− "}
       if (S.overview) { renderMetrics(S.overview); renderPluginHealth(S.overview.plugins || {}); }
       if (S.bots.length) { renderBots(); botNames(); }
       renderApiButtons();
+      renderDays(pickedDays());
     };
     wire();
     S.token = readToken();
     if (!S.token) showGate();
+    renderDays([1, 2, 3, 4, 5]);
     loadDashboard();
-    loadBots().then(function () { loadRules(); loadRouting(); loadPlugins(); });
+    loadBots().then(function () { loadRules(); loadRouting(); loadPlugins(); loadAgent(); loadGuest(); loadA2A(); });
     loadConfig();
     loadBackups();
     loadLive().then(function () {

@@ -58,6 +58,8 @@ from .open_api import router as open_api_router
 from .plugin_manager import PluginError, PluginManager
 from .router_engine import RouterEngine
 from .rule_engine import InboundMessage, RuleEngine
+from . import agent_admin
+from .agent_runtime import AgentRuntime, PLUGIN_ID as AGENT_PLUGIN_ID, build_sender
 from .ws_protocol import CLICommandError, WebSocketProtocolError
 
 APP_NAME = "popopx-bot-studio"
@@ -147,20 +149,22 @@ class CoreServices:
         content: Dict[str, Any],
         *,
         plugin_id: str = "",
+        file_path: str = "",
     ) -> Dict[str, Any]:
         ref = ref_for(chat_type, chat_id)
+        note = str(content.get("text", "")) or (f"file={Path(str(file_path)).name}" if file_path else "")
         try:
-            result = await self.supervisor.send_content(bot_id, ref, content)
+            result = await self.supervisor.send_content(bot_id, ref, content, file_path=file_path)
         except SEND_ERRORS as exc:
             self.db.log_message(
                 bot_id, "out", chat_type=chat_type, chat_ref=ref,
-                text=str(content.get("text", "")), plugin_id=plugin_id,
+                text=note, plugin_id=plugin_id,
                 status="error", error=f"{type(exc).__name__}: {exc}",
             )
             raise
         self.db.log_message(
             bot_id, "out", chat_type=chat_type, chat_ref=ref,
-            text=str(content.get("text", "")), plugin_id=plugin_id, status="ok",
+            text=note, plugin_id=plugin_id, status="ok",
         )
         return result
 
@@ -184,16 +188,29 @@ class StudioStack:
     gateway: BotGateway
     services: CoreServices
     booted: Dict[str, Any] = field(default_factory=dict)
+    agent: Optional[AgentRuntime] = None
 
     async def start(self, *, spawn: bool = True) -> Dict[str, Any]:
         await self.plugins.load_async()
+        self.attach_agent()
         await self.plugins.start()
         if spawn:
             self.booted = await self.supervisor.boot()
         return self.booted
 
+    def attach_agent(self) -> None:
+        """把共享运行时交给替身机器人插件（插件自己拿不到 ``Settings``）。"""
+        if self.agent is None:
+            return
+        plugin = self.plugins.get(AGENT_PLUGIN_ID)
+        attach = getattr(plugin, "attach", None)
+        if callable(attach):
+            attach(self.agent)
+
     async def stop(self) -> None:
         await self.plugins.stop()
+        if self.agent is not None:
+            self.agent.close()
         await self.supervisor.shutdown()
         self.db.close()
 
@@ -211,6 +228,7 @@ class StudioStack:
             "routing": self.router.stats(),
             "plugins": self.plugins.health(),
             "gateway": self.gateway.snapshot(),
+            "agent": self.agent.status() if self.agent is not None else {},
             "locale": self.settings.default_locale,
             "locales": list(LOCALES),
             "host": self.settings.host,
@@ -247,7 +265,8 @@ def build_stack(
     services = CoreServices(supervisor, ledger, gateway)
     plugins.services = services
     supervisor.on_event = gateway.handle_event
-    return StudioStack(conf, ledger, supervisor, rules, router, plugins, gateway, services)
+    agent = AgentRuntime(db=ledger, settings=conf, sender=build_sender(services))
+    return StudioStack(conf, ledger, supervisor, rules, router, plugins, gateway, services, agent=agent)
 
 
 class _LateServices:
@@ -476,6 +495,10 @@ def _register_routes(app: FastAPI) -> None:
         from fastapi.staticfiles import StaticFiles
 
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    # 通道 B 的访客页与控制台的替身机器人面板（见 agent_admin 的模块文档）
+    agent_admin.add_book_routes(app)
+    agent_admin.add_admin_routes(app)
 
     # ------------------------------------------------------------- session
     @app.get(f"{API_PREFIX}/session")
