@@ -15,7 +15,7 @@
   `/usr/local/bin/popopx-cli`，或用 `--no-node-download` 完全跳过。
 - 模型零下载：`needle3.cact`（33.7 MiB，<50 MB）随仓库内置，加载前做 SHA-256 完整性校验，
   部署启动后即刻可用；没有 C 运行时或 SDK 时自动退回本仓自带的确定性抽取器（第 5 节）。
-- 自检门禁：`python3 -m app.main --self-test` → **24 组 / 7287 条真实断言 / 0 失败 / 约 19 秒 / 退出码 0**，
+- 自检门禁：`python3 -m app.main --self-test` → **24 组 / 7300 条真实断言 / 0 失败 / 约 19 秒 / 退出码 0**，
   只依赖 `studio/tests/fake_popopx_cli.py`（同样讲真协议、且把 profile 存在 `bot_chat.db` 里的有状态替身），不联网、不连 SMP。
 
 English document: [`README.en.md`](README.en.md)
@@ -178,7 +178,9 @@ Bot 控制端口不对外发布，源码卷只读挂载，状态存命名卷 `st
 `rules/preview` `routing/{id}` `routing/preview` `plugins` `plugins/{id}` `logs` `updates`
 `backup/export` `backup/import` `backups` `config` `i18n/parity`。
 `qrcode` 与 `qr.png` 默认返回 `https://popopx.chat/i/v1/<Base64URL密文>` 隐私封装邀请链接
-（HKDF-SHA256 + ChaCha20-Poly1305，隐藏 `smpN.popopx.im` 节点域名），二维码面板底部的
+（HKDF-SHA256 + ChaCha20-Poly1305，隐藏 `smpN.popopx.im` 节点域名；密钥参数
+IKM/salt/info/AAD 与 `popopx-service-suite` 的 `opaque_invite_codec.py @ a6c1632`
+逐字节一致，客户端只维护一套解密密钥），二维码面板底部的
 折叠区与 `qr.png?raw=1` 才用于原始 `smp://` 地址的高级诊断。
 
 替身机器人管理 API 前缀 `/api/agent`（同样要 `require_admin`）：
@@ -376,7 +378,7 @@ cd studio
 | `web_admin` | 146 | 控制台路由、CSRF/Cookie、越权与审计 |
 | `i18n` | 320 | 18 语种完整性、协商、欢迎语、页面注入 |
 | `web_live` | 60 | 真实 ASGI 生命周期、WebSocket、冷备往返、隐私二维码 |
-| `invite_codec` | 88 | HKDF/ChaCha20 标准向量、跨语言邀请链接向量、`/i/v1/` 路径主机校验、随机 nonce、明文不泄漏、篡改拒绝 |
+| `invite_codec` | 101 | HKDF/ChaCha20 标准向量、service-suite 密钥与两条标准向量逐字节对齐、`/i/v1/` 路径主机校验、随机 nonce、明文不泄漏、篡改拒绝 |
 | `bundle` | 281 | 冷备导出/校验/篡改/跨账本迁移/幂等、CLI `invite` 与 `--raw-links` |
 | `eco_cards` | 89 | `::POPOPX_ECO::` 卡片与 `::CB::` 回执编解码、越界字段拒绝 |
 | `ics` | 65 | RFC 5545 转义、UTC 时刻、UID/DUMPSTAMP、时长与跨天 |
@@ -386,7 +388,7 @@ cd studio
 | `guest_portal` | 571 | 令牌签发/验签/过期/撤销/次数预算、并发领取、脱敏空档、.ics 门槛、页面转义 |
 | `agent_engine` | 3552 | Needle 3 抽取与确定性回退、权重 SHA-256 门禁、偏好规则、话术与推理桥降级、密钥卫生 |
 | `agent_console` | 389 | `/api/agent/*` 与 `/book/*` 路由、鉴权、面板数据结构、18 语种词条 |
-| 合计 | **7287** | 24/24 组 0 失败，退出码 0 |
+| 合计 | **7300** | 24/24 组 0 失败，退出码 0 |
 
 ## 10. 运维与安全注意
 

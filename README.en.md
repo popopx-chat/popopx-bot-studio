@@ -20,7 +20,7 @@ account and no e-mail address.
 - Zero model downloads: `needle3.cact` (33.7 MiB, under 50 MB) ships inside the repository, is
   SHA-256 verified before loading, and is usable the moment the service starts. Without a C
   runtime or SDK the runtime falls back to the deterministic extractor in this repo (section 5).
-- Self-test gate: `python3 -m app.main --self-test` → **24 groups / 7287 real assertions /
+- Self-test gate: `python3 -m app.main --self-test` → **24 groups / 7300 real assertions /
   0 failures / ~19 s / exit code 0**. It only needs `studio/tests/fake_popopx_cli.py`
   (a local stand-in that speaks the same wire protocol and keeps profiles in `bot_chat.db`,
   so it survives a restart like the real CLI) — no network, no SMP server.
@@ -199,7 +199,9 @@ Admin API, prefix `/api/admin`: `session` `overview` `bots` `bots/{id}` (plus
 `rules/{id}` `rules/preview` `routing/{id}` `routing/preview` `plugins` `plugins/{id}`
 `logs` `updates` `backup/export` `backup/import` `backups` `config` `i18n/parity`.
 `qrcode` and `qr.png` return an opaque `https://popopx.chat/i/v1/<Base64URL ciphertext>` invite
-link by default (HKDF-SHA256 + ChaCha20-Poly1305, hiding `smpN.popopx.im` node hostnames);
+link by default (HKDF-SHA256 + ChaCha20-Poly1305, hiding `smpN.popopx.im` node hostnames;
+the IKM/salt/info/AAD parameters match `popopx-service-suite`'s
+`opaque_invite_codec.py @ a6c1632` byte-for-byte, so clients carry one decryption key);
 only the collapsed diagnostics block in the QR dialog and `qr.png?raw=1` reveal the raw
 `smp://` address.
 
@@ -430,7 +432,7 @@ cd studio
 | `web_admin` | 146 | console routes, CSRF/cookie, authorisation and audit |
 | `i18n` | 320 | 18-locale completeness, negotiation, welcome text, page injection |
 | `web_live` | 60 | real ASGI lifecycle, WebSocket, cold-backup round trip, privacy QR |
-| `invite_codec` | 88 | HKDF/ChaCha20 standard vectors, cross-language invite vectors, `/i/v1/` path-host checks, random nonce, no plaintext leak, tamper rejection |
+| `invite_codec` | 101 | HKDF/ChaCha20 standard vectors, service-suite key and two standard vectors matched byte-for-byte, `/i/v1/` path-host checks, random nonce, no plaintext leak, tamper rejection |
 | `bundle` | 281 | export/verify/tamper/cross-ledger migration/idempotency, CLI `invite` and `--raw-links` |
 | `eco_cards` | 89 | `::POPOPX_ECO::` card and `::CB::` receipt codec, rejection of out-of-contract fields |
 | `ics` | 65 | RFC 5545 escaping, UTC instants, UID/DUMPSTAMP, durations and day-spanning events |
@@ -440,7 +442,7 @@ cd studio
 | `guest_portal` | 571 | token issue/verify/expiry/revocation/visit budget, concurrent claims, masked availability, the .ics gate, page escaping |
 | `agent_engine` | 3552 | Needle 3 extraction and the deterministic fallback, the weight SHA-256 gate, preference rules, copy and reasoner degradation, secret hygiene |
 | `agent_console` | 389 | `/api/agent/*` and `/book/*` routes, auth, panel data shapes, 18-locale strings |
-| total | **7287** | 24/24 groups, 0 failures, exit code 0 |
+| total | **7300** | 24/24 groups, 0 failures, exit code 0 |
 
 ## 10. Operations and security notes
 

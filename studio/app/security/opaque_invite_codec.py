@@ -11,8 +11,13 @@ Wire format::
 
 * key   = HKDF-SHA256(ikm=MASTER_KEY, salt=HKDF_SALT, info=HKDF_INFO, len=32)
 * nonce = 12 字节随机数，每条链接独立生成
-* AEAD  = ChaCha20-Poly1305，空 AAD，16 字节 tag 由 ``cryptography`` 追加在密文后
+* AEAD  = ChaCha20-Poly1305，16 字节 tag 由 ``cryptography`` 追加在密文后
+* AAD   = ``popopx.chat/invite-link/v1/aad``
 * token = 无填充 Base64URL（字母表 ``A-Z a-z 0-9 - _``）
+
+密钥参数与 ``popopx-service-suite`` 的 ``opaque_invite_codec.py``（commit
+``a6c1632``）逐字节一致，全生态只维护一套解密密钥；``opaque_invite_vectors.json``
+同时收录该仓的两条标准向量，本仓解码、重编码必须与它们逐字节相同。
 
 密钥随客户端一起编译：这是隐藏 ``smpN.popopx.im`` 节点域名与集群拓扑的隐私层，
 而不是对拿到 App 二进制的人的保密承诺。``opaque_invite_vectors.json``（与本模块
@@ -37,12 +42,13 @@ LINK_PREFIX = "https://popopx.chat/i/v1/"
 NONCE_BYTES = 12
 TAG_BYTES = 16
 KEY_BYTES = 32
-AAD = b""
+AAD = b"popopx.chat/invite-link/v1/aad"
 
 # 固定主密钥：换掉它会让所有已发出的隐私链接失效，客户端也必须同步换。
-MASTER_KEY = bytes.fromhex("6223e28971f041bbc5f8f71d2257dd3f910c3ca4f16d1ceab02906201ae63d30")
-HKDF_SALT = b"popopx.chat opaque invite v1"
-HKDF_INFO = b"popopx-opaque-invite-key"
+# 与 popopx-service-suite/gateway/app/opaque_invite_codec.py @ a6c1632 一致。
+MASTER_KEY = bytes.fromhex("d1abbcb09b5bf244d9d8b6b1dcc38835b5a419d8a1d62b014c1bb49e765dbdeb")
+HKDF_SALT = b"popopx.chat/invite-link/v1/salt"
+HKDF_INFO = b"popopx.chat/invite-link/v1/key"
 
 MAX_ADDRESS_BYTES = 4096
 # 12B nonce + 4096B 明文 + 16B tag 的 base64url 上界（含取整余量）。

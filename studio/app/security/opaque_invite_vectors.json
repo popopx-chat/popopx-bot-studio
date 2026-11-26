@@ -4,16 +4,16 @@
   "encoding": "base64url-unpadded(nonce || ciphertext || tag)",
   "key_derivation": {
     "algorithm": "HKDF-SHA256",
-    "ikm_hex": "6223e28971f041bbc5f8f71d2257dd3f910c3ca4f16d1ceab02906201ae63d30",
-    "salt_b64": "cG9wb3B4LmNoYXQgb3BhcXVlIGludml0ZSB2MQ==",
-    "info_b64": "cG9wb3B4LW9wYXF1ZS1pbnZpdGUta2V5",
-    "key_hex": "b6d4bb9b92dd9dd03655443d1b50db50a871a5dcdbfcb288a4ef4fea943711e3"
+    "ikm_hex": "d1abbcb09b5bf244d9d8b6b1dcc38835b5a419d8a1d62b014c1bb49e765dbdeb",
+    "salt_b64": "cG9wb3B4LmNoYXQvaW52aXRlLWxpbmsvdjEvc2FsdA==",
+    "info_b64": "cG9wb3B4LmNoYXQvaW52aXRlLWxpbmsvdjEva2V5",
+    "key_hex": "18aae99401e21c87b52136c3e7e4cce3324db73fa4e076f9b93bdbcc941ed598"
   },
   "aead": {
     "algorithm": "ChaCha20-Poly1305",
     "nonce_bytes": 12,
     "tag_bytes": 16,
-    "aad_b64": ""
+    "aad_b64": "cG9wb3B4LmNoYXQvaW52aXRlLWxpbmsvdjEvYWFk"
   },
   "standard_vectors": {
     "hkdf_sha256_rfc5869_tc1": {
@@ -37,22 +37,42 @@
       "name": "smp-long",
       "address": "smp://f2X5hAgHZW9-SVkhMou0sUFg3AHUi2pE3kSw46AiGjY=@smp1.popopx.im/quheabd5hdghpztkw53fho6fki722npoytgvkutnbh3gtpgrlna5ukad#/?v=1-2",
       "nonce_hex": "000102030405060708090a0b",
-      "token": "AAECAwQFBgcICQoLRRMMxfY-HuIjFeZ-LyP5_Mo5N65NEfeiCDhmCfPZ0Vz4yfKN661UD32XUrkhXlUARvn03RP68swrJh_jpmcAI3DqmF6VkEV_br8mo8oQRiQaofJoPitC4xurSAlVBv4uoujDQn29jiH3G8GbrULYq9sh59HRAznG87BSxXo4F_hrPAvMgd5lIweB57BzBcGaVRA",
-      "link": "https://popopx.chat/i/v1/AAECAwQFBgcICQoLRRMMxfY-HuIjFeZ-LyP5_Mo5N65NEfeiCDhmCfPZ0Vz4yfKN661UD32XUrkhXlUARvn03RP68swrJh_jpmcAI3DqmF6VkEV_br8mo8oQRiQaofJoPitC4xurSAlVBv4uoujDQn29jiH3G8GbrULYq9sh59HRAznG87BSxXo4F_hrPAvMgd5lIweB57BzBcGaVRA"
+      "token": "AAECAwQFBgcICQoLYAnjU2Jd7URVmBjs5C65KLMdBItcvpu_RwJdcR65zuVQs-0deHdbc1LDqB7AvOaD-98T5v4Sa5PsXYnz8Tinpt90QmHUQtOrIZM5adz0dtuLD09QZOdc2LYAd2crZE_N86w37n-bkB_BTh4LO57b_0RqzfwORNwsGCPZMKHui_j79W5EQ8gq7p9fZqAyAZQzRD8",
+      "link": "https://popopx.chat/i/v1/AAECAwQFBgcICQoLYAnjU2Jd7URVmBjs5C65KLMdBItcvpu_RwJdcR65zuVQs-0deHdbc1LDqB7AvOaD-98T5v4Sa5PsXYnz8Tinpt90QmHUQtOrIZM5adz0dtuLD09QZOdc2LYAd2crZE_N86w37n-bkB_BTh4LO57b_0RqzfwORNwsGCPZMKHui_j79W5EQ8gq7p9fZqAyAZQzRD8"
     },
     {
       "name": "https-short",
       "address": "https://smp8.popopx.im/a#lrdvu2d8A1GumSmoKb2krQmtKhWXq-tyGpHuM7aMwsw",
       "nonce_hex": "fffefdfcfbfaf9f8f7f6f5f4",
-      "token": "__79_Pv6-fj39vX0sBOOhWWkCqkcUCtMieSGZSHZwMGSwAprqPBdtSLMi5WPHT-M3uePVl6vQuEIIZtEf1emyrRBpSglGCJomIFuJ3xDkPnt77moOdVoTFcYVMj8hKiZ",
-      "link": "https://popopx.chat/i/v1/__79_Pv6-fj39vX0sBOOhWWkCqkcUCtMieSGZSHZwMGSwAprqPBdtSLMi5WPHT-M3uePVl6vQuEIIZtEf1emyrRBpSglGCJomIFuJ3xDkPnt77moOdVoTFcYVMj8hKiZ"
+      "token": "__79_Pv6-fj39vX0etpzcFowPyEmDHHnsjrNHW4yXantVCdiFZ1-ISszfXaqY6XCvU6lGOEYSSqUUjfr-1XIhiBROLlX_1asQRQU4zEUUQtkixEj6GnADyR7e4DzB5i5",
+      "link": "https://popopx.chat/i/v1/__79_Pv6-fj39vX0etpzcFowPyEmDHHnsjrNHW4yXantVCdiFZ1-ISszfXaqY6XCvU6lGOEYSSqUUjfr-1XIhiBROLlX_1asQRQU4zEUUQtkixEj6GnADyR7e4DzB5i5"
     },
     {
       "name": "popopx-scheme",
       "address": "popopx:/fakepermanentlink",
       "nonce_hex": "000000000000000000000001",
-      "token": "AAAAAAAAAAAAAAABsy74f6yOknQfKhut2PEhxRKCnOPGFs2ec8M68x48EJvnPWSchFysbPw",
-      "link": "https://popopx.chat/i/v1/AAAAAAAAAAAAAAABsy74f6yOknQfKhut2PEhxRKCnOPGFs2ec8M68x48EJvnPWSchFysbPw"
+      "token": "AAAAAAAAAAAAAAAB7D5F3gW1f7A-ZH0EwshZlW_t_kYAMvMCElRrpp3VxiT43_gR-moiACo",
+      "link": "https://popopx.chat/i/v1/AAAAAAAAAAAAAAAB7D5F3gW1f7A-ZH0EwshZlW_t_kYAMvMCElRrpp3VxiT43_gR-moiACo"
     }
-  ]
+  ],
+  "upstream": {
+    "source": "popopx-service-suite/gateway/app/opaque_invite_codec.py @ a6c1632",
+    "format": "opaque-invite-v1",
+    "vectors": [
+      {
+        "name": "contact",
+        "plaintext_utf8": "https://smp1.popopx.im/a#contact-key-7f3c9d2e",
+        "nonce_hex": "000102030405060708090a0b",
+        "sealed_b64url": "AAECAwQFBgcICQoLexDnGT5IpFl-wACcrRaMD-VAL_Neu_mxEVFBSiy_ntA1jeFWJQUOK2KN-Brkjm6cyTDMBLG6otbYN40_yA",
+        "link": "https://popopx.chat/i/v1/AAECAwQFBgcICQoLexDnGT5IpFl-wACcrRaMD-VAL_Neu_mxEVFBSiy_ntA1jeFWJQUOK2KN-Brkjm6cyTDMBLG6otbYN40_yA"
+      },
+      {
+        "name": "channel",
+        "plaintext_utf8": "popopx://channel/smp8.popopx.im/green-room#key=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&pub=ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+        "nonce_hex": "0c0d0e0f1011121314151617",
+        "sealed_b64url": "DA0ODxAREhMUFRYXVJ7hF63rsa2m286inXXWr22y2IaJXqr8lpdlGFgdUpN9B3kYlSCkZ33ihVEe_8yT00K1YMzCcMTw61_JNVt1pWGhl84dXlszrmsVrL8TsxN5Dd-iy8hHBzDS_O4dUQvSXCh7vhUuMkq0A30GfAHUoaWG6_YR73N5YmVK4FpCm_GNxAZX1lwqaHI2hQATkoR5Ppb0x9VPwQLtnQ",
+        "link": "https://popopx.chat/i/v1/DA0ODxAREhMUFRYXVJ7hF63rsa2m286inXXWr22y2IaJXqr8lpdlGFgdUpN9B3kYlSCkZ33ihVEe_8yT00K1YMzCcMTw61_JNVt1pWGhl84dXlszrmsVrL8TsxN5Dd-iy8hHBzDS_O4dUQvSXCh7vhUuMkq0A30GfAHUoaWG6_YR73N5YmVK4FpCm_GNxAZX1lwqaHI2hQATkoR5Ppb0x9VPwQLtnQ"
+      }
+    ]
+  }
 }

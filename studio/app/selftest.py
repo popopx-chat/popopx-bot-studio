@@ -246,6 +246,7 @@ from .rule_engine import (
     interpolate,
 )
 from .security.opaque_invite_codec import (
+    AAD as INVITE_AAD,
     FORMAT_VERSION as INVITE_FORMAT_VERSION,
     HKDF_INFO as INVITE_HKDF_INFO,
     HKDF_SALT as INVITE_HKDF_SALT,
@@ -5318,8 +5319,11 @@ def group_invite_codec(test: SelfTest, h: Harness) -> None:
     t.eq("derive_invite_key 可复现", derive_invite_key(), INVITE_KEY)
     t.eq("派生密钥 32 字节", len(INVITE_KEY), 32)
     t.ne("派生密钥不等于主密钥", INVITE_KEY, INVITE_MASTER_KEY)
+    t.eq("格式密钥等于 service-suite 公布值", INVITE_KEY.hex(),
+         "18aae99401e21c87b52136c3e7e4cce3324db73fa4e076f9b93bdbcc941ed598")
     t.eq("AEAD 算法名", doc["aead"]["algorithm"], "ChaCha20-Poly1305")
-    t.eq("AEAD AAD 为空", base64.b64decode(doc["aead"]["aad_b64"]), b"")
+    t.eq("AEAD AAD 与 service-suite 一致", base64.b64decode(doc["aead"]["aad_b64"]), INVITE_AAD)
+    t.eq("AAD 是上游固定串", INVITE_AAD, b"popopx.chat/invite-link/v1/aad")
 
     std = doc["standard_vectors"]
     hkdf = std["hkdf_sha256_rfc5869_tc1"]
@@ -5356,6 +5360,20 @@ def group_invite_codec(test: SelfTest, h: Harness) -> None:
         t.eq(f"向量 {name} 主机是 popopx.chat", parts.hostname, "popopx.chat")
         t.eq(f"向量 {name} 路径是 /i/v1/<token>", parts.path, "/i/v1/" + vector["token"])
         t.eq(f"向量 {name} 无端口无查询", (parts.port, parts.query), (None, ""))
+
+    upstream = doc["upstream"]
+    t.eq("上游向量来源", upstream["source"],
+         "popopx-service-suite/gateway/app/opaque_invite_codec.py @ a6c1632")
+    t.eq("上游向量格式", upstream["format"], "opaque-invite-v1")
+    t.eq("上游标准向量数量", len(upstream["vectors"]), 2)
+    for vector in upstream["vectors"]:
+        name = vector["name"]
+        nonce = bytes.fromhex(vector["nonce_hex"])
+        link = encode_invite_link(vector["plaintext_utf8"], nonce=nonce)
+        t.eq(f"上游向量 {name} 重编码链接逐字节一致", link, vector["link"])
+        t.eq(f"上游向量 {name} token 逐字节一致", link[len(INVITE_LINK_PREFIX):], vector["sealed_b64url"])
+        t.eq(f"上游向量 {name} 解码回原文", decode_invite_link(vector["link"]), vector["plaintext_utf8"])
+        t.eq(f"上游向量 {name} 不含明文节点域名", "popopx.im" in vector["link"], False)
 
     sample = doc["vectors"][0]
     fixed = encode_invite_link(sample["address"], nonce=bytes.fromhex(sample["nonce_hex"]))
