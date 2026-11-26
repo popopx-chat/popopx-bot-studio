@@ -11,6 +11,7 @@ Web 管理后台「一键冷备」完全一致：gzip tar + Studio manifest，�
 用法示例::
 
     python3 official_tools/export_bot_bundle.py list --json
+    python3 official_tools/export_bot_bundle.py invite --bot opsbot --qr /srv/opsbot-invite.png
     python3 official_tools/export_bot_bundle.py export --bot opsbot --dest /srv/backups
     python3 official_tools/export_bot_bundle.py export --bot bot_alpha_102f2e99 \\
         --dest /srv/backups --passphrase-env BOT_BACKUP_PASSPHRASE
@@ -61,6 +62,7 @@ from app.config import (  # noqa: E402
 )
 from app.database import Database, LedgerError  # noqa: E402
 from app.main import APP_NAME, APP_VERSION, StudioStack, build_stack  # noqa: E402
+from app.security.opaque_invite_codec import OpaqueInviteError, encode_invite_link  # noqa: E402
 
 BUNDLE_FORMAT = "popopx-bot-studio-bundle"
 PLAIN_SUFFIX = ".botbundle"
@@ -87,6 +89,7 @@ __all__ = [
     "restore",
     "restore_with_stack",
     "list_bots",
+    "invite",
     "resolve_bot",
     "find_reuse_row",
     "ToolError",
@@ -254,17 +257,30 @@ def resolve_bot(db: Database, ref: str) -> Dict[str, Any]:
     return bot
 
 
-def bot_view(bot: Dict[str, Any]) -> Dict[str, Any]:
-    """对外 Bot 视图：永不携带 ``bot_token`` 等敏感字段。"""
-    return {
+def bot_view(bot: Dict[str, Any], *, raw: bool = False) -> Dict[str, Any]:
+    """对外 Bot 视图：永不携带 ``bot_token`` 等敏感字段。
+
+    默认只给隐私封装后的 ``invite_link``；``smp://`` 原始地址与 SMP 节点列表
+    会把集群拓扑暴露给拿到输出的人，只有 ``raw=True``（命令行的 ``--raw`` /
+    ``--raw-links``）才附带。
+    """
+    raw_link = str(bot.get("permanent_link") or bot.get("contact_address") or "")
+    try:
+        invite = encode_invite_link(raw_link) if raw_link else ""
+    except OpaqueInviteError:
+        invite = ""
+    view = {
         "bot_id": str(bot.get("id") or ""),
         "name": str(bot.get("name") or ""),
         "display_name": str(bot.get("display_name") or ""),
         "port": int(bot.get("port") or 0),
         "status": str(bot.get("status") or ""),
-        "permanent_link": str(bot.get("permanent_link") or ""),
-        "smp_servers": str(bot.get("smp_servers") or ""),
+        "invite_link": invite,
     }
+    if raw:
+        view["permanent_link"] = raw_link
+        view["smp_servers"] = str(bot.get("smp_servers") or "")
+    return view
 
 
 def sidecar_path(bundle: Path) -> Path:
@@ -700,6 +716,7 @@ def list_bots(
     data_dir: Optional[Any] = None,
     env_file: Optional[Any] = None,
     include_deleted: bool = False,
+    raw_links: bool = False,
 ) -> Dict[str, Any]:
     """读取账本，返回 Bot 列表（含端口与隔离目录状态）与备份包概览。"""
     settings = make_settings(
@@ -724,7 +741,7 @@ def list_bots(
             exists = paths.cli_data.is_dir()
             items.append(
                 {
-                    **bot_view(row),
+                    **bot_view(row, raw=raw_links),
                     "cli_data": str(paths.cli_data),
                     "cli_data_exists": exists,
                     "cli_data_files": (
@@ -757,6 +774,68 @@ def all_rows(db: Database) -> List[Dict[str, Any]]:
     with db._lock:  # noqa: SLF001 - 复用同一连接，避免另开 WAL 读者
         cursor = db.conn.execute("SELECT * FROM bots ORDER BY port")
         return [dict(row) for row in cursor.fetchall()]
+
+
+# ---------------------------------------------------------------------- invite
+def invite(
+    bot_ref: str,
+    *,
+    raw: bool = False,
+    qr_path: Optional[Any] = None,
+    box_size: int = 8,
+    data_dir: Optional[Any] = None,
+    env_file: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """生成 Bot 邀请链接与可选二维码；默认隐私封装，``raw=True`` 才暴露原始地址。"""
+    settings = make_settings(
+        str(data_dir) if data_dir else None, str(env_file) if env_file else None
+    )
+    stack = build_stack(settings)
+    try:
+        bot = resolve_bot(stack.db, bot_ref)
+        raw_link = str(bot.get("permanent_link") or bot.get("contact_address") or "")
+        if not raw_link:
+            raise ToolError(
+                f"Bot {bot_ref} 还没有永久联系地址，请先启动并完成初始化", code=EXIT_RUNTIME
+            )
+        if raw:
+            link = raw_link
+        else:
+            try:
+                link = encode_invite_link(raw_link)
+            except OpaqueInviteError as exc:
+                raise ToolError(f"邀请链接隐私封装失败：{exc}", code=EXIT_RUNTIME) from exc
+        qr_report: Optional[Dict[str, Any]] = None
+        if qr_path:
+            target = Path(str(qr_path)).expanduser()
+            try:
+                payload = stack.supervisor.qr_png(link, box_size=int(box_size))
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(payload)
+                os.chmod(target, SECURE_FILE_MODE)
+            except (OSError, ValueError) as exc:
+                raise ToolError(
+                    f"无法写出二维码 {target}：{type(exc).__name__}: {exc}", code=EXIT_DEST_UNWRITABLE
+                ) from exc
+            qr_report = {
+                "path": str(target.resolve()),
+                "bytes": len(payload),
+                "sha256": sha256_bytes(payload),
+                "mode": mode_text(target),
+                "box": int(box_size),
+            }
+        return {
+            "ok": True,
+            "action": "invite",
+            "data_dir": str(settings.data_dir),
+            "bot": bot_view(bot, raw=raw),
+            "link": link,
+            "opaque": not raw,
+            "qr": qr_report,
+            "warnings": permission_warnings(settings.startup_warnings),
+        }
+    finally:
+        stack.db.close()
 
 
 # ----------------------------------------------------------------------- render
@@ -818,6 +897,20 @@ def render_restore(payload: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_invite(payload: Dict[str, Any]) -> str:
+    bot = payload["bot"]
+    lines = [
+        f"Bot {bot['bot_id']}（{bot['name']}）邀请链接：",
+        f"  {payload['link']}",
+        f"  形式：{'原始 smp:// 地址（高级诊断，含节点域名）' if not payload['opaque'] else '隐私封装，可安全分享'}",
+    ]
+    qr = payload.get("qr")
+    if qr:
+        lines.append(f"  二维码：{qr['path']}（{qr['bytes']} 字节，权限 {qr['mode']}，box={qr['box']}）")
+        lines.append(f"  二维码 SHA-256 {qr['sha256']}")
+    return "\n".join(lines)
+
+
 def render_list(payload: Dict[str, Any]) -> str:
     lines = [
         f"数据目录 {payload['data_dir']}",
@@ -842,6 +935,7 @@ RENDERERS = {
     "verify": render_verify,
     "restore": render_restore,
     "list": render_list,
+    "invite": render_invite,
 }
 
 
@@ -874,9 +968,11 @@ def build_parser() -> argparse.ArgumentParser:
         prog=PROG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
-            "POPOPX Bot Studio 离线冷备工具：导出 / 校验 / 迁移恢复单个 Bot 的冷备包。\n"
+            "POPOPX Bot Studio 离线冷备工具：导出 / 校验 / 迁移恢复 / 邀请链接生成单个 Bot 的冷备包。\n"
             "复用 app.main.build_stack 与 BotSupervisor.export_bundle/import_bundle，"
             "产物与管理后台「一键冷备」完全一致。\n"
+            "invite 与 list 默认只输出 https://popopx.chat.<密文> 隐私封装邀请链接；"
+            "--raw / --raw-links 才输出原始 smp:// 地址。\n"
             "全程离线：不启动 Web 服务、不拉起 popopx-cli、不监听任何端口。"
         ),
         epilog=(
@@ -918,7 +1014,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_list = sub.add_parser("list", help="列出账本中的 Bot、端口与既有备份包")
     p_list.add_argument("--all", action="store_true", help="同时列出 status=deleted 的 Bot")
+    p_list.add_argument(
+        "--raw-links",
+        dest="raw_links",
+        action="store_true",
+        help="额外输出原始 smp:// 永久地址与 SMP 节点列表（高级诊断；默认只给隐私封装邀请链接）",
+    )
     _add_common(p_list)
+
+    p_invite = sub.add_parser(
+        "invite", help="生成 Bot 隐私封装邀请链接与可选二维码", formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p_invite.add_argument(
+        "--bot", required=True, metavar="ID|NAME|PORT", help="Bot id、Bot 名称或控制端口（三者之一）"
+    )
+    p_invite.add_argument(
+        "--raw",
+        action="store_true",
+        help="输出原始 smp:// 协议地址（高级诊断；会暴露 SMP 节点域名与集群拓扑）",
+    )
+    p_invite.add_argument("--qr", default="", metavar="PATH", help="同时把二维码写成 PNG（文件权限 0600）")
+    p_invite.add_argument("--box", type=int, default=8, metavar="N", help="二维码像素倍率，默认 8")
+    _add_common(p_invite)
 
     p_verify = sub.add_parser("verify", help="非破坏式校验既有冷备包的完整性")
     p_verify.add_argument("bundle", metavar="BUNDLE", help=f"冷备包路径（{PLAIN_SUFFIX} 或 {ENC_SUFFIX}）")
@@ -955,7 +1072,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-COMMANDS = ("export", "list", "verify", "restore")
+COMMANDS = ("export", "list", "verify", "restore", "invite")
 
 
 def normalize_argv(argv: Sequence[str]) -> List[str]:
@@ -999,7 +1116,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     command = getattr(args, "command", None)
     if command not in COMMANDS:
         parser.print_help(sys.stderr)
-        print("错误：缺少子命令（export / list / verify / restore）", file=sys.stderr)
+        print("错误：缺少子命令（export / list / verify / restore / invite）", file=sys.stderr)
         return EXIT_USAGE
 
     as_json = bool(args.json)
@@ -1022,6 +1139,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 data_dir=args.data_dir or None,
                 env_file=args.env_file or None,
                 include_deleted=bool(args.all),
+                raw_links=bool(getattr(args, "raw_links", False)),
+            )
+        elif command == "invite":
+            payload = invite(
+                args.bot,
+                raw=bool(args.raw),
+                qr_path=args.qr or None,
+                box_size=int(args.box),
+                data_dir=args.data_dir or None,
+                env_file=args.env_file or None,
             )
         elif command == "verify":
             payload = verify_bundle(Path(args.bundle).expanduser(), passphrase=passphrase)

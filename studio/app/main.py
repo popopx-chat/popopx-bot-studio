@@ -39,6 +39,7 @@ from .bot_supervisor import (
 from . import open_api
 from .config import DEFAULT_HOST, DEFAULT_PORT, Settings, is_loopback_host, load_settings
 from .database import Database, LedgerError, connect
+from .security.opaque_invite_codec import OpaqueInviteError
 from .gateway import BotGateway
 from .i18n import (
     FALLBACK_LOCALE,
@@ -523,7 +524,13 @@ def _register_routes(app: FastAPI) -> None:
     @app.get(f"{API_PREFIX}/bots")
     async def bots_list(request: Request, _=Depends(require_admin)) -> Dict[str, Any]:
         stack = stack_of(request)
-        return ok({"bots": stack.db.list_bots(), "runtime": stack.supervisor.status()})
+        bots = stack.db.list_bots()
+        for row in bots:
+            try:
+                row["invite_link"] = stack.supervisor.invite_link(row)
+            except OpaqueInviteError:
+                row["invite_link"] = ""
+        return ok({"bots": bots, "runtime": stack.supervisor.status()})
 
     @app.post(f"{API_PREFIX}/bots")
     async def bots_create(request: Request, _=Depends(require_admin)) -> Any:
@@ -633,6 +640,12 @@ def _register_routes(app: FastAPI) -> None:
         link = str(bot.get("permanent_link") or bot.get("contact_address") or "")
         if not link:
             return fail(409, "该 Bot 还没有永久联系地址")
+        raw_mode = str(request.query_params.get("raw") or "").lower() in {"1", "true", "yes", "on"}
+        if not raw_mode:
+            try:
+                link = stack.supervisor.invite_link(bot)
+            except OpaqueInviteError as exc:
+                return fail(409, f"邀请链接隐私封装失败：{exc}")
         try:
             png = stack.supervisor.qr_png(link, box_size=int(request.query_params.get("box", "8")))
         except (ValueError, OSError) as exc:

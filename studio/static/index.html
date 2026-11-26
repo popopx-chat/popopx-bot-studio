@@ -235,6 +235,7 @@ details.cfg[open]>summary::before{content:"− "}
       <thead><tr><th>bot_id</th><th><span data-i18n="field_name">Name</span></th><th><span data-i18n="field_port">Control port</span></th>
         <th><span data-i18n="field_status">Status</span></th><th><span data-i18n="field_token">Bot token</span></th>
         <th><span data-i18n="action_start">Start</span> · <span data-i18n="action_stop">Stop</span> · <span data-i18n="action_restart">Restart</span></th>
+        <th><span data-i18n="bots_invite_link">Invite link</span></th>
         <th><span data-i18n="bots_qr">QR code</span></th></tr></thead>
       <tbody id="bots-rows"></tbody>
     </table></div></div>
@@ -644,9 +645,14 @@ details.cfg[open]>summary::before{content:"− "}
 <dialog id="d-qr" aria-labelledby="q-h">
   <h3 id="q-h" data-i18n="bots_qr">QR code</h3>
   <form>
-    <dl class="kv"><dt data-i18n="bots_permanent_link">Permanent address</dt><dd id="q-link">—</dd><dt>sha256</dt><dd id="q-hash">—</dd></dl>
+    <dl class="kv"><dt data-i18n="bots_invite_link">Invite link</dt><dd id="q-link">—</dd><dt>sha256</dt><dd id="q-hash">—</dd></dl>
     <img id="q-img" width="230" height="230" data-i18n-attr="alt:bots_qr">
     <div class="row sect" style="justify-content:center"><a class="btn" id="q-png" href="#" target="_blank" rel="noopener">qr.png</a></div>
+    <details class="cfg sect">
+      <summary data-i18n="bots_raw_link">View original smp:// address (advanced diagnostics)</summary>
+      <dl class="kv"><dt data-i18n="bots_permanent_link">Permanent address</dt><dd id="q-raw">—</dd></dl>
+      <div class="row" style="margin-top:8px"><button type="button" class="btn sm" id="q-raw-copy"><span data-i18n="action_copy">Copy</span></button></div>
+    </details>
     <div class="foot">
       <button type="button" class="btn" id="q-copy"><span data-i18n="action_copy">Copy</span></button>
       <button type="button" class="btn" id="q-cancel"><span data-i18n="action_cancel">Cancel</span></button>
@@ -939,7 +945,7 @@ details.cfg[open]>summary::before{content:"− "}
   /* ================================================================ state */
   var S = { token: "", view: "dashboard", bots: [], runtime: [], overview: null, config: null,
             rules: [], commands: [], routing: [], groups: [], plugins: null, backups: [],
-            agent: null, prefs: null, links: [], pendingDelete: null, qrLink: "" };
+            agent: null, prefs: null, links: [], pendingDelete: null, qrLink: "", rawLink: "" };
 
   function readToken() { try { return localStorage.getItem(LS_TOK) || ""; } catch (e) { return ""; } }
   function saveToken(v) {
@@ -1133,6 +1139,12 @@ details.cfg[open]>summary::before{content:"− "}
         }));
       });
       tr.appendChild(acts);
+      var inv = btn(t("action_copy"), "sm", function () {
+        if (b.invite_link) { copy(b.invite_link); return; }
+        showQr(b.id);
+      });
+      inv.disabled = !b.invite_link;
+      tr.appendChild(el("td")).appendChild(inv);
       tr.appendChild(el("td")).appendChild(btn(t("bots_qr"), "sm", function () { showQr(b.id); }));
       on(tr, "click", function (ev) {
         if (ev.target.closest("button")) return;
@@ -1157,7 +1169,9 @@ details.cfg[open]>summary::before{content:"− "}
   function showQr(id) {
     api(API + "/bots/" + encodeURIComponent(id) + "/qrcode").then(function (d) {
       S.qrLink = String(d.link || "");
+      S.rawLink = String(d.raw_link || "");
       get("q-link").textContent = S.qrLink || "—";
+      get("q-raw").textContent = S.rawLink || "—";
       get("q-hash").textContent = String(d.sha256 || "—");
       var img = get("q-img");
       img.src = String(d.data_url || "");
@@ -1818,6 +1832,7 @@ details.cfg[open]>summary::before{content:"− "}
     });
     on(get("q-cancel"), "click", function () { closeDlg(get("d-qr")); });
     on(get("q-copy"), "click", function () { copy(S.qrLink); });
+    on(get("q-raw-copy"), "click", function () { copy(S.rawLink); });
 
     on(get("f-new"), "submit", function (ev) {
       ev.preventDefault();

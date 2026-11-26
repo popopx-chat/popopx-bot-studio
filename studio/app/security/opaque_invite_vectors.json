@@ -1,0 +1,58 @@
+{
+  "format": "popopx-opaque-invite-v1",
+  "link_prefix": "https://popopx.chat.",
+  "encoding": "base64url-unpadded(nonce || ciphertext || tag)",
+  "key_derivation": {
+    "algorithm": "HKDF-SHA256",
+    "ikm_hex": "6223e28971f041bbc5f8f71d2257dd3f910c3ca4f16d1ceab02906201ae63d30",
+    "salt_b64": "cG9wb3B4LmNoYXQgb3BhcXVlIGludml0ZSB2MQ==",
+    "info_b64": "cG9wb3B4LW9wYXF1ZS1pbnZpdGUta2V5",
+    "key_hex": "b6d4bb9b92dd9dd03655443d1b50db50a871a5dcdbfcb288a4ef4fea943711e3"
+  },
+  "aead": {
+    "algorithm": "ChaCha20-Poly1305",
+    "nonce_bytes": 12,
+    "tag_bytes": 16,
+    "aad_b64": ""
+  },
+  "standard_vectors": {
+    "hkdf_sha256_rfc5869_tc1": {
+      "ikm_hex": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+      "salt_hex": "000102030405060708090a0b0c",
+      "info_hex": "f0f1f2f3f4f5f6f7f8f9",
+      "length": 42,
+      "okm_hex": "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865"
+    },
+    "chacha20_poly1305_rfc8439_2_8_2": {
+      "key_hex": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "nonce_hex": "070000004041424344454647",
+      "aad_hex": "50515253c0c1c2c3c4c5c6c7",
+      "plaintext_utf8": "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.",
+      "ciphertext_hex": "d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d63dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b3692ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc3ff4def08e4b7a9de576d26586cec64b6116",
+      "tag_hex": "1ae10b594f09e26a7e902ecbd0600691"
+    }
+  },
+  "vectors": [
+    {
+      "name": "smp-long",
+      "address": "smp://f2X5hAgHZW9-SVkhMou0sUFg3AHUi2pE3kSw46AiGjY=@smp1.popopx.im/quheabd5hdghpztkw53fho6fki722npoytgvkutnbh3gtpgrlna5ukad#/?v=1-2",
+      "nonce_hex": "000102030405060708090a0b",
+      "token": "AAECAwQFBgcICQoLRRMMxfY-HuIjFeZ-LyP5_Mo5N65NEfeiCDhmCfPZ0Vz4yfKN661UD32XUrkhXlUARvn03RP68swrJh_jpmcAI3DqmF6VkEV_br8mo8oQRiQaofJoPitC4xurSAlVBv4uoujDQn29jiH3G8GbrULYq9sh59HRAznG87BSxXo4F_hrPAvMgd5lIweB57BzBcGaVRA",
+      "link": "https://popopx.chat.AAECAwQFBgcICQoLRRMMxfY-HuIjFeZ-LyP5_Mo5N65NEfeiCDhmCfPZ0Vz4yfKN661UD32XUrkhXlUARvn03RP68swrJh_jpmcAI3DqmF6VkEV_br8mo8oQRiQaofJoPitC4xurSAlVBv4uoujDQn29jiH3G8GbrULYq9sh59HRAznG87BSxXo4F_hrPAvMgd5lIweB57BzBcGaVRA"
+    },
+    {
+      "name": "https-short",
+      "address": "https://smp8.popopx.im/a#lrdvu2d8A1GumSmoKb2krQmtKhWXq-tyGpHuM7aMwsw",
+      "nonce_hex": "fffefdfcfbfaf9f8f7f6f5f4",
+      "token": "__79_Pv6-fj39vX0sBOOhWWkCqkcUCtMieSGZSHZwMGSwAprqPBdtSLMi5WPHT-M3uePVl6vQuEIIZtEf1emyrRBpSglGCJomIFuJ3xDkPnt77moOdVoTFcYVMj8hKiZ",
+      "link": "https://popopx.chat.__79_Pv6-fj39vX0sBOOhWWkCqkcUCtMieSGZSHZwMGSwAprqPBdtSLMi5WPHT-M3uePVl6vQuEIIZtEf1emyrRBpSglGCJomIFuJ3xDkPnt77moOdVoTFcYVMj8hKiZ"
+    },
+    {
+      "name": "popopx-scheme",
+      "address": "popopx:/fakepermanentlink",
+      "nonce_hex": "000000000000000000000001",
+      "token": "AAAAAAAAAAAAAAABsy74f6yOknQfKhut2PEhxRKCnOPGFs2ec8M68x48EJvnPWSchFysbPw",
+      "link": "https://popopx.chat.AAAAAAAAAAAAAAABsy74f6yOknQfKhut2PEhxRKCnOPGFs2ec8M68x48EJvnPWSchFysbPw"
+    }
+  ]
+}

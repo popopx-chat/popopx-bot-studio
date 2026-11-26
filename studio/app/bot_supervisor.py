@@ -41,6 +41,7 @@ from websockets.exceptions import WebSocketException
 from .config import DEFAULT_CLI_BIN_PATH, SECURE_FILE_MODE, Settings
 from .i18n import fill_placeholders, normalize_locale, render_welcome
 from .database import Database
+from .security.opaque_invite_codec import OpaqueInviteError, encode_invite_link
 from .ws_protocol import (
     CLICommandError,
     CLIWebSocketClient,
@@ -427,10 +428,21 @@ class BotSupervisor:
         out["reply_rules"] = len(self.db.list_reply_rules(bot_id))
         out["routing_rules"] = len(self.db.list_routing_rules(bot_id))
         out["messages"] = self.db.message_stats(bot_id)
+        out["invite_link"] = ""
         out["qr_png"] = ""
         if bot.get("permanent_link"):
-            out["qr_png"] = self.qr_data_url(str(bot["permanent_link"]))
+            try:
+                out["invite_link"] = encode_invite_link(str(bot["permanent_link"]))
+            except OpaqueInviteError:
+                out["invite_link"] = ""
+            if out["invite_link"]:
+                out["qr_png"] = self.qr_data_url(out["invite_link"])
         return out
+
+    def invite_link(self, bot: Dict[str, Any]) -> str:
+        """Bot 的隐私封装邀请链接；没有永久地址时返回空串。"""
+        raw = str(bot.get("permanent_link") or bot.get("contact_address") or "")
+        return encode_invite_link(raw) if raw else ""
 
     # ------------------------------------------------------------- lifecycle
     async def start_bot(self, bot_id: str, *, provision: bool = True) -> Dict[str, Any]:
@@ -926,16 +938,22 @@ class BotSupervisor:
         link = str(bot.get("permanent_link") or bot.get("contact_address") or "")
         if not link:
             raise BotSupervisorError("该 Bot 还没有永久联系地址，请先启动并完成初始化")
-        payload = self.qr_png(link)
+        try:
+            invite = encode_invite_link(link)
+        except OpaqueInviteError as exc:
+            raise BotSupervisorError(f"邀请链接隐私封装失败：{exc}") from exc
+        payload = self.qr_png(invite)
         info: Dict[str, Any] = {
             "bot_id": bot_id,
-            "link": link,
+            "link": invite,
+            "raw_link": link,
+            "opaque": True,
             "bytes": len(payload),
             "sha256": sha256_bytes(payload),
             "data_url": "data:image/png;base64," + base64.b64encode(payload).decode("ascii"),
         }
         if save:
-            info["file"] = str(self.save_qr(bot_id, link))
+            info["file"] = str(self.save_qr(bot_id, invite))
         return info
 
     # ---------------------------------------------------------- cold backup

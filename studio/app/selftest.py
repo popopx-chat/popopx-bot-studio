@@ -1,8 +1,10 @@
 """``python3 -m app.main --self-test`` 的全量自检运行器。
 
-分组设计（15 组，按运行顺序）：配置与权限、SQLite 账本、WebSocket 协议帧、
-进程监督、开通初始化、规则引擎、路由引擎、网关管线、插件总线、开发者 Open API、
-Web 后台、i18n 完整性、Web 实时链路、冷备往返、安装脚本与交付物纪律。
+分组设计（24 组，按运行顺序；权威清单见文件末尾的 ``SELF_TEST_GROUPS``）：
+配置与权限、SQLite 账本、WebSocket 协议帧、进程监督、开通初始化、规则引擎、
+路由引擎、网关管线、插件总线、开发者 Open API、Web 后台、i18n 完整性、
+Web 实时链路、隐私邀请链接、冷备往返、生态卡片、.ics、安装脚本与交付物纪律、
+Mac 节点、A2A、访客门户、替身引擎与替身面板。
 
 自检只依赖 ``studio/tests/fake_popopx_cli.py``（一个同样讲真协议的本地替身），
 因此不需要真实的 ``popopx-cli``，也不会连接任何 SMP 服务器。
@@ -241,6 +243,26 @@ from .rule_engine import (
     RuleError,
     default_context,
     interpolate,
+)
+from .security.opaque_invite_codec import (
+    FORMAT_VERSION as INVITE_FORMAT_VERSION,
+    HKDF_INFO as INVITE_HKDF_INFO,
+    HKDF_SALT as INVITE_HKDF_SALT,
+    INVITE_KEY,
+    LINK_PREFIX as INVITE_LINK_PREFIX,
+    MASTER_KEY as INVITE_MASTER_KEY,
+    MAX_ADDRESS_BYTES as INVITE_MAX_ADDRESS_BYTES,
+    MAX_TOKEN_CHARS as INVITE_MAX_TOKEN_CHARS,
+    NONCE_BYTES as INVITE_NONCE_BYTES,
+    OpaqueInviteError,
+    TAG_BYTES as INVITE_TAG_BYTES,
+    b64url_decode,
+    b64url_encode,
+    decode_invite_link,
+    derive_invite_key,
+    encode_invite_link,
+    hkdf_sha256,
+    looks_like_opaque_invite,
 )
 from .ws_protocol import (
     CLITimeoutError,
@@ -1166,18 +1188,27 @@ async def live_provisioning(stack: StudioStack) -> List[Tuple[str, Any, str]]:
     except BotSupervisorError:
         out.append(("匿名+不自动 被拒绝", True, ""))
 
-    qr = sup.qr_png(row["permanent_link"])
+    invite = sup.invite_link(row)
+    out.append(("邀请链接是隐私封装", invite.startswith(INVITE_LINK_PREFIX), invite[:40]))
+    out.append(("邀请链接可解回永久地址", decode_invite_link(invite) == row["permanent_link"], invite[:40]))
+    out.append(("邀请链接不含节点域名", "popopx.im" not in invite and "smp://" not in invite, invite[:40]))
+    qr = sup.qr_png(invite)
     out.append(("二维码是 PNG", qr[:8] == b"\x89PNG\r\n\x1a\n", qr[:8].hex()))
     out.append(("二维码体积合理", 200 < len(qr) < 200_000, str(len(qr))))
-    big_qr = sup.qr_png(row["permanent_link"], box_size=32)
+    big_qr = sup.qr_png(invite, box_size=32)
     out.append(("更大 box 生成更大像素", _png_size(big_qr)[0] > _png_size(qr)[0], f"{_png_size(qr)} vs {_png_size(big_qr)}"))
     out.append(("二维码仍是合法 PNG", big_qr[:8] == b"\x89PNG\r\n\x1a\n", big_qr[:8].hex()))
     info = sup.bot_qr(bot_id, save=True)
-    out.append(("bot_qr 返回链接", info["link"] == row["permanent_link"], info["link"]))
+    out.append(("bot_qr 返回隐私封装链接", info["link"].startswith(INVITE_LINK_PREFIX), info["link"][:40]))
+    out.append(("bot_qr 可解回永久地址", decode_invite_link(info["link"]) == row["permanent_link"], info["link"][:40]))
+    out.append(("bot_qr 密文不含明文 smp", "smp://" not in info["link"] and "popopx.im" not in info["link"], info["link"][:40]))
+    out.append(("bot_qr 回带原始地址供诊断", info["raw_link"] == row["permanent_link"], str(info["raw_link"])))
+    out.append(("bot_qr 标记 opaque", info["opaque"] is True, str(info.get("opaque"))))
     out.append(("bot_qr 带 data url", info["data_url"].startswith("data:image/png;base64,"), info["data_url"][:32]))
     out.append(("bot_qr 校验和 64 位", len(info["sha256"]) == 64, info["sha256"]))
     out.append(("二维码文件已保存", Path(info["file"]).is_file(), info["file"]))
     out.append(("detail 内嵌二维码", bot["qr_png"].startswith("data:image/png;base64,"), str(bot["qr_png"])[:24]))
+    out.append(("detail 邀请链接可解", decode_invite_link(bot["invite_link"]) == row["permanent_link"], str(bot["invite_link"])[:40]))
 
     group = await sup.create_group(bot_id, "客服群")
     out.append(("建群返回 groupId", group["group_id"] == 42, str(group)))
@@ -2741,7 +2772,7 @@ def group_i18n(test: SelfTest, h: Harness) -> None:
     t.eq("目录只有后台与官网两套", sorted(CATALOGS), ["admin", "site"])
     t.eq("后台目录覆盖 18 语种", sorted(CATALOGS["admin"]), sorted(LOCALES))
     t.eq("官网目录覆盖 18 语种", sorted(CATALOGS["site"]), sorted(LOCALES))
-    t.eq("后台英文基准词条数", len(en_admin), 97)
+    t.eq("后台英文基准词条数", len(en_admin), 99)
     t.eq("官网英文基准词条数", len(en_site), 21)
     for locale in LOCALES:
         t.eq(f"{locale} 后台无缺失词条", missing_keys(locale, "admin"), [])
@@ -2927,13 +2958,19 @@ def group_web_live(test: SelfTest, h: Harness) -> None:
         t.eq("再启动", c.post(f"{api}/bots/{bid}/start", headers=a, json={}).json()["bot"]["state"], "running")
 
         q = c.get(f"{api}/bots/{bid}/qrcode", headers=a).json()
-        t.eq("二维码链接是永久链接", q["link"], bot["permanent_link"])
+        t.check("二维码链接是隐私封装", q["link"].startswith(INVITE_LINK_PREFIX), q["link"][:40])
+        t.eq("二维码链接可解回永久链接", decode_invite_link(q["link"]), bot["permanent_link"])
+        t.eq("二维码接口回带原始地址", q["raw_link"], bot["permanent_link"])
+        t.eq("二维码接口标记 opaque", q["opaque"], True)
         t.eq("二维码是 PNG base64", q["data_url"][:22], "data:image/png;base64,")
         t.eq("二维码字节数与 sha 一致", len(q["sha256"]), 64)
         png = c.get(f"{api}/bots/{bid}/qr.png", headers=a)
         t.eq("PNG 直出", png.headers["content-type"], "image/png")
         t.eq("PNG 魔数正确", png.content[:4], b"\x89PNG")
         t.check("PNG 非空", len(png.content) > 500, str(len(png.content)))
+        raw_png = c.get(f"{api}/bots/{bid}/qr.png", headers=a, params={"raw": "1"})
+        t.eq("raw=1 仍是 PNG", raw_png.content[:4], b"\x89PNG")
+        t.ne("raw=1 与默认二维码内容不同", raw_png.content, png.content)
         t.eq("send 送达", c.post(f"{api}/bots/{bid}/send", headers=a,
                                  json={"chat_ref": "@7", "text": "在的"}).json()["delivered"], True)
         t.eq("联系人来自 CLI", c.get(f"{api}/bots/{bid}/contacts", headers=a).json()["contacts"],
@@ -3185,6 +3222,7 @@ def group_bundle(test: SelfTest, h: Harness) -> None:
     help_proc = run_bundle_tool(["--help"], bund_env)
     t.eq("--help 退出码 0", help_proc.returncode, 0)
     t.contains("--help 列出子命令", help_proc.stdout, "export")
+    t.contains("--help 列出 invite", help_proc.stdout, "invite")
     t.contains("--help 说明退出码", help_proc.stdout, "退出码：0 成功")
     t.contains("--help 声明全程离线", help_proc.stdout, "不监听任何端口")
     version = run_bundle_tool(["--version"], bund_env)
@@ -3501,6 +3539,40 @@ def group_bundle(test: SelfTest, h: Harness) -> None:
     t.eq("--into 未知 Bot 退出码 3", bad_into.returncode, tool.EXIT_BOT_MISSING)
     t.contains("--into 未知 Bot 提示", json.loads(bad_into.stdout)["error"], "不存在")
 
+    # ------------------------------------------------------------------ 邀请链接
+    inv = run_bundle_tool(["invite", "--bot", "bundbot", "--json"], bund_env)
+    t.eq("invite 退出码 0", inv.returncode, 0)
+    invj = json.loads(inv.stdout)
+    t.eq("invite 动作名", invj["action"], "invite")
+    t.eq("invite ok", invj["ok"], True)
+    t.check("invite 链接是隐私封装", invj["link"].startswith(INVITE_LINK_PREFIX), invj["link"][:40])
+    t.eq("invite 可解回永久地址", decode_invite_link(invj["link"]), "popopx:/fakepermanentlink")
+    t.eq("invite 标记 opaque", invj["opaque"], True)
+    t.eq("invite 默认不带原始地址", "permanent_link" in invj["bot"], False)
+    t.eq("invite 默认不带 SMP 节点", "smp_servers" in invj["bot"], False)
+    t.eq("invite 输出不含明文 smp", "smp://" in inv.stdout, False)
+    t.contains("invite 人读渲染含链接", tool.render_invite(invj), invj["link"])
+    qr_file = h.root / "invite-qr.png"
+    inv_qr = run_bundle_tool(["invite", "--bot", "bundbot", "--qr", str(qr_file), "--json"], bund_env)
+    t.eq("invite --qr 退出码 0", inv_qr.returncode, 0)
+    qrj = json.loads(inv_qr.stdout)["qr"]
+    t.eq("invite 二维码落盘", qr_file.is_file(), True)
+    t.eq("invite 二维码权限 0600", mode_of(qr_file), SECURE_FILE_MODE)
+    t.eq("invite 二维码 PNG 魔数", qr_file.read_bytes()[:4], b"\x89PNG")
+    t.eq("invite 二维码哈希可复算", qrj["sha256"], hashlib.sha256(qr_file.read_bytes()).hexdigest())
+    t.eq("invite 二维码报告 box", qrj["box"], 8)
+    t.eq("invite 二维码报告权限", qrj["mode"], "0600")
+    raw_inv = run_bundle_tool(["invite", "--bot", "bundbot", "--raw", "--json"], bund_env)
+    t.eq("invite --raw 退出码 0", raw_inv.returncode, 0)
+    rawj = json.loads(raw_inv.stdout)
+    t.eq("invite --raw 输出原始地址", rawj["link"], "popopx:/fakepermanentlink")
+    t.eq("invite --raw 标记非 opaque", rawj["opaque"], False)
+    t.eq("invite --raw 视图带原始地址", rawj["bot"]["permanent_link"], "popopx:/fakepermanentlink")
+    inv_unknown = run_bundle_tool(["invite", "--bot", "nope", "--json"], bund_env)
+    t.eq("invite 未知 Bot 退出码 3", inv_unknown.returncode, tool.EXIT_BOT_MISSING)
+    inv_deleted = run_bundle_tool(["invite", "--bot", info["ghost_id"], "--json"], bund_env)
+    t.eq("invite 软删除 Bot 退出码 4", inv_deleted.returncode, tool.EXIT_BOT_DELETED)
+
     # ------------------------------------------------------------------ 列表
     listing = run_bundle_tool(["list", "--json"], bund_env)
     t.eq("list 退出码 0", listing.returncode, 0)
@@ -3515,11 +3587,18 @@ def group_bundle(test: SelfTest, h: Harness) -> None:
     t.eq("list 行含 bot_id", item["bot_id"], info["bot_id"])
     t.eq("list 行含端口", item["port"], info["port"])
     t.eq("list 行含状态", item["status"], "stopped")
-    t.eq("list 行含永久链接", item["permanent_link"], "popopx:/fakepermanentlink")
+    t.eq("list 行带隐私邀请链接", decode_invite_link(item["invite_link"]), "popopx:/fakepermanentlink")
+    t.eq("list 默认不暴露原始地址", "permanent_link" in item, False)
+    t.eq("list 默认不暴露 SMP 节点", "smp_servers" in item, False)
     t.eq("list 行 cli-data 存在", item["cli_data_exists"], True)
     t.eq("list 行 cli-data 文件数", item["cli_data_files"], 3)
     t.eq("list 行列出既有备份包数", len(item["bundles"]), 2)
     t.eq("list 不泄露 token", "bot_token" in json.dumps(lst, ensure_ascii=False), False)
+    raw_list = run_bundle_tool(["list", "--raw-links", "--json"], bund_env)
+    t.eq("list --raw-links 退出码 0", raw_list.returncode, 0)
+    raw_item = json.loads(raw_list.stdout)["bots"][0]
+    t.eq("--raw-links 输出原始地址", raw_item["permanent_link"], "popopx:/fakepermanentlink")
+    t.eq("--raw-links 输出 SMP 节点字段", "smp_servers" in raw_item, True)
     t.contains("人读列表渲染含数据目录", tool.render_list(lst), data_dir)
     all_proc = run_bundle_tool(["list", "--all", "--json"], bund_env)
     t.eq("list --all 退出码 0", all_proc.returncode, 0)
@@ -3530,6 +3609,11 @@ def group_bundle(test: SelfTest, h: Harness) -> None:
     t.contains("--list 人读含端口区间", sugar.stdout, "控制端口区间")
     clash = run_bundle_tool(["--list", "verify", str(bundle_path)], bund_env)
     t.eq("--list 与子命令冲突退出码 2", clash.returncode, tool.EXIT_USAGE)
+
+    draft = ledger.create_bot("draftbot", 5397)
+    no_addr = run_bundle_tool(["invite", "--bot", str(draft["id"]), "--json"], bund_env)
+    t.eq("invite 无永久地址退出码 1", no_addr.returncode, tool.EXIT_RUNTIME)
+    t.contains("invite 无永久地址说明原因", json.loads(no_addr.stdout)["error"], "永久联系地址")
 
     ledger.close()
 
@@ -5210,6 +5294,117 @@ def group_agent_console(test: SelfTest, h: Harness) -> None:
     t.eq("面板键都在页面上被用到", [key for key in panel_keys if f'data-i18n="{key}"' not in page_html], [])
 
 
+def group_invite_codec(test: SelfTest, h: Harness) -> None:
+    """隐私邀请链接：跨语言向量、随机 nonce、明文不泄漏与篡改拒绝。"""
+    t = test
+    vectors_path = ROOT / "app" / "security" / "opaque_invite_vectors.json"
+    t.eq("向量文件随代码发布", vectors_path.is_file(), True)
+    doc = json.loads(vectors_path.read_text(encoding="utf-8"))
+    t.eq("向量格式名", doc["format"], "popopx-opaque-invite-v1")
+    t.eq("向量链接前缀与实现一致", doc["link_prefix"], INVITE_LINK_PREFIX)
+    t.eq("格式版本为 1", INVITE_FORMAT_VERSION, 1)
+    t.eq("nonce 12 字节", INVITE_NONCE_BYTES, 12)
+    t.eq("tag 16 字节", INVITE_TAG_BYTES, 16)
+    t.eq("token 上限 5500 字符", INVITE_MAX_TOKEN_CHARS, 5500)
+
+    kdf = doc["key_derivation"]
+    t.eq("向量 IKM 与实现一致", kdf["ikm_hex"], INVITE_MASTER_KEY.hex())
+    t.eq("向量 salt 与实现一致", base64.b64decode(kdf["salt_b64"]), INVITE_HKDF_SALT)
+    t.eq("向量 info 与实现一致", base64.b64decode(kdf["info_b64"]), INVITE_HKDF_INFO)
+    t.eq("派生密钥与向量逐字节一致", INVITE_KEY.hex(), kdf["key_hex"])
+    t.eq("derive_invite_key 可复现", derive_invite_key(), INVITE_KEY)
+    t.eq("派生密钥 32 字节", len(INVITE_KEY), 32)
+    t.ne("派生密钥不等于主密钥", INVITE_KEY, INVITE_MASTER_KEY)
+    t.eq("AEAD 算法名", doc["aead"]["algorithm"], "ChaCha20-Poly1305")
+    t.eq("AEAD AAD 为空", base64.b64decode(doc["aead"]["aad_b64"]), b"")
+
+    std = doc["standard_vectors"]
+    hkdf = std["hkdf_sha256_rfc5869_tc1"]
+    t.eq(
+        "RFC 5869 TC1 HKDF 向量",
+        hkdf_sha256(bytes.fromhex(hkdf["ikm_hex"]), bytes.fromhex(hkdf["salt_hex"]),
+                    bytes.fromhex(hkdf["info_hex"]), int(hkdf["length"])).hex(),
+        hkdf["okm_hex"],
+    )
+    from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305  # noqa: PLC0415
+
+    aead = std["chacha20_poly1305_rfc8439_2_8_2"]
+    sealed = ChaCha20Poly1305(bytes.fromhex(aead["key_hex"])).encrypt(
+        bytes.fromhex(aead["nonce_hex"]),
+        aead["plaintext_utf8"].encode("utf-8"),
+        bytes.fromhex(aead["aad_hex"]),
+    )
+    t.eq("RFC 8439 §2.8.2 密文逐字节一致", sealed[:-16].hex(), aead["ciphertext_hex"])
+    t.eq("RFC 8439 §2.8.2 tag 逐字节一致", sealed[-16:].hex(), aead["tag_hex"])
+
+    for vector in doc["vectors"]:
+        name = vector["name"]
+        nonce = bytes.fromhex(vector["nonce_hex"])
+        link = encode_invite_link(vector["address"], nonce=nonce)
+        t.eq(f"向量 {name} 编码逐字节一致", link, vector["link"])
+        t.eq(f"向量 {name} 解码回原文", decode_invite_link(vector["link"]), vector["address"])
+        t.eq(f"向量 {name} token 即去前缀链接", link[len(INVITE_LINK_PREFIX):], vector["token"])
+        raw = b64url_decode(vector["token"])
+        t.eq(f"向量 {name} 密文长度", len(raw), INVITE_NONCE_BYTES + len(vector["address"].encode("utf-8")) + INVITE_TAG_BYTES)
+        t.eq(f"向量 {name} 前 12 字节是 nonce", raw[:INVITE_NONCE_BYTES], nonce)
+        t.eq(f"向量 {name} 不含明文节点域名", "popopx.im" in vector["link"], False)
+        t.eq(f"向量 {name} 不含明文协议头", "smp://" in vector["link"], False)
+
+    sample = doc["vectors"][0]
+    fixed = encode_invite_link(sample["address"], nonce=bytes.fromhex(sample["nonce_hex"]))
+    t.eq("固定 nonce 密文不含 smp 子串", "smp" in fixed.lower(), False)
+
+    first = encode_invite_link(sample["address"])
+    second = encode_invite_link(sample["address"])
+    t.ne("两条新链接 nonce 随机不同", first, second)
+    first_raw = b64url_decode(first[len(INVITE_LINK_PREFIX):])
+    second_raw = b64url_decode(second[len(INVITE_LINK_PREFIX):])
+    t.ne("随机 nonce 逐字节不同", first_raw[:INVITE_NONCE_BYTES], second_raw[:INVITE_NONCE_BYTES])
+    t.eq("随机链接仍可解回原文", [decode_invite_link(first), decode_invite_link(second)],
+         [sample["address"], sample["address"]])
+    t.eq("随机密文不含明文 smp 协议头", "smp://" in first, False)
+    t.eq("随机密文不含明文节点域名", "popopx.im" in first, False)
+    t.eq("随机密文不含原地址", sample["address"] in first, False)
+
+    token = sample["token"]
+    pos = len(token) // 2
+    alt = "A" if token[pos] != "A" else "B"
+    tampered = INVITE_LINK_PREFIX + token[:pos] + alt + token[pos + 1:]
+    t.raises("篡改密文抛 OpaqueInviteError", OpaqueInviteError, decode_invite_link, tampered)
+    t.raises("截断链接抛 OpaqueInviteError", OpaqueInviteError, decode_invite_link, sample["link"][:-8])
+    t.raises("带填充的 token 被拒", OpaqueInviteError, decode_invite_link, sample["link"] + "=")
+    t.raises("错误前缀被拒", OpaqueInviteError, decode_invite_link,
+             "https://popopx.im." + token)
+    t.raises("原始 smp:// 不是封装链接", OpaqueInviteError, decode_invite_link, sample["address"])
+    t.raises("非字符串链接被拒", OpaqueInviteError, decode_invite_link, 12345)
+    t.raises("超长 token 被拒", OpaqueInviteError, decode_invite_link, INVITE_LINK_PREFIX + "A" * (INVITE_MAX_TOKEN_CHARS + 1))
+
+    t.raises("11 字节 nonce 被拒", OpaqueInviteError, encode_invite_link, "smp://x", nonce=b"\x00" * 11)
+    t.raises("13 字节 nonce 被拒", OpaqueInviteError, encode_invite_link, "smp://x", nonce=b"\x00" * 13)
+    t.raises("字符串 nonce 被拒", OpaqueInviteError, encode_invite_link, "smp://x", nonce="0" * 12)
+    t.raises("空地址被拒", OpaqueInviteError, encode_invite_link, "")
+    t.raises("纯空白地址被拒", OpaqueInviteError, encode_invite_link, "   ")
+    t.raises("含换行地址被拒", OpaqueInviteError, encode_invite_link, "smp://a\nb")
+    t.raises("含 NUL 地址被拒", OpaqueInviteError, encode_invite_link, "smp://a\x00b")
+    t.raises("超长地址被拒", OpaqueInviteError, encode_invite_link, "a" * (INVITE_MAX_ADDRESS_BYTES + 1))
+    t.eq("恰好上限的地址可封装", decode_invite_link(encode_invite_link("a" * INVITE_MAX_ADDRESS_BYTES)),
+         "a" * INVITE_MAX_ADDRESS_BYTES)
+    t.eq("字节级 bytearray nonce 可用", decode_invite_link(
+        encode_invite_link("smp://x", nonce=bytearray(range(12)))), "smp://x")
+    t.eq("地址两端空白被清理", decode_invite_link(encode_invite_link("  smp://x  ")), "smp://x")
+    t.eq("UTF-8 地址往返", decode_invite_link(encode_invite_link("smp://客服@节点/队列")), "smp://客服@节点/队列")
+
+    t.eq("b64url 无填充编码", b64url_encode(b"\xfb\xff"), "-_8")
+    t.eq("b64url 往返", b64url_decode(b64url_encode(b"\x00\x01\x02")), b"\x00\x01\x02")
+    for bad in ("", "A", "AA==", "A$", "a b"):
+        t.raises(f"非法 Base64URL {bad!r} 被拒", OpaqueInviteError, b64url_decode, bad)
+
+    t.eq("封装链接可被前缀识别", looks_like_opaque_invite(sample["link"]), True)
+    t.eq("原始地址不被误判", looks_like_opaque_invite(sample["address"]), False)
+    t.eq("JSON 向量覆盖三种地址形态", sorted(v["name"] for v in doc["vectors"]),
+         ["https-short", "popopx-scheme", "smp-long"])
+
+
 def _external_group(module: str, key: str) -> Callable[[SelfTest, Harness], None]:
     """延迟导入外部自检模块的分组。
 
@@ -5240,6 +5435,7 @@ SELF_TEST_GROUPS: Dict[str, Callable[[SelfTest, Harness], None]] = {
     "web_admin": group_web_admin,
     "i18n": group_i18n,
     "web_live": group_web_live,
+    "invite_codec": group_invite_codec,
     "bundle": group_bundle,
     "eco_cards": group_eco_cards,
     "ics": group_ics,

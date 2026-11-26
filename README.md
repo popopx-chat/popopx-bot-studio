@@ -15,7 +15,7 @@
   `/usr/local/bin/popopx-cli`，或用 `--no-node-download` 完全跳过。
 - 模型零下载：`needle3.cact`（33.7 MiB，<50 MB）随仓库内置，加载前做 SHA-256 完整性校验，
   部署启动后即刻可用；没有 C 运行时或 SDK 时自动退回本仓自带的确定性抽取器（第 5 节）。
-- 自检门禁：`python3 -m app.main --self-test` → **23 组 / 7155 条真实断言 / 0 失败 / 约 16 秒 / 退出码 0**，
+- 自检门禁：`python3 -m app.main --self-test` → **24 组 / 7275 条真实断言 / 0 失败 / 约 19 秒 / 退出码 0**，
   只依赖 `studio/tests/fake_popopx_cli.py`（同样讲真协议、且把 profile 存在 `bot_chat.db` 里的有状态替身），不联网、不连 SMP。
 
 English document: [`README.en.md`](README.en.md)
@@ -89,7 +89,7 @@ start_macos.sh             macOS 日常启动器（自动 venv + 随机令牌 + 
 docker-compose.yml         容器编排（只发布 127.0.0.1，cap_drop + no-new-privileges）
 .env.example               26 个键的配置模板（含替身机器人、Mac Node、访客门户、大模型话术端点）
 official_tools/
-  export_bot_bundle.py     离线冷备：export / list / verify / restore（明文与 AES-256-GCM 包）
+  export_bot_bundle.py     离线冷备：export / list / verify / restore / invite（明文与 AES-256-GCM 包）
   verify_needle_assets.py  内置 Needle 3 权重的 SHA-256 清单校验器（安装与 --check 都会跑）
 studio/
   app/                     引擎源码（见上图模块分工）
@@ -177,6 +177,9 @@ Bot 控制端口不对外发布，源码卷只读挂载，状态存命名卷 `st
 `send` `contacts` `groups` `rules` `routing` `start` `stop` `restart`）`rules/{id}`
 `rules/preview` `routing/{id}` `routing/preview` `plugins` `plugins/{id}` `logs` `updates`
 `backup/export` `backup/import` `backups` `config` `i18n/parity`。
+`qrcode` 与 `qr.png` 默认返回 `https://popopx.chat.<Base64URL密文>` 隐私封装邀请链接
+（HKDF-SHA256 + ChaCha20-Poly1305，隐藏 `smpN.popopx.im` 节点域名），二维码面板底部的
+折叠区与 `qr.png?raw=1` 才用于原始 `smp://` 地址的高级诊断。
 
 替身机器人管理 API 前缀 `/api/agent`（同样要 `require_admin`）：
 `summary` `engine`（GET 读状态 / POST 切换引擎）、`extract`（试一句）、
@@ -329,10 +332,14 @@ HTML 转义，18 语种文案齐全且占位符完全一致。
 
 ```bash
 cd studio && ../.venv/bin/python ../official_tools/export_bot_bundle.py list
+../.venv/bin/python ../official_tools/export_bot_bundle.py invite --bot <id> --qr /secure/invite.png
 ../.venv/bin/python ../official_tools/export_bot_bundle.py export --bot <id> --out /secure/backups
 ../.venv/bin/python ../official_tools/export_bot_bundle.py verify /secure/backups/<name>.botbundle
 ../.venv/bin/python ../official_tools/export_bot_bundle.py restore --bundle <包> --data-dir <新目录>
 ```
+
+`list` 与 `invite` 默认只输出 `https://popopx.chat.<Base64URL密文>` 隐私封装邀请链接，
+另有 `--raw` / `--raw-links` 供管理员查看原始 `smp://` 地址与 SMP 节点列表。
 
 产物 `.botbundle`（gzip tar）+ 边车 `<name>.botbundle.json`；加 `--passphrase`（或
 `--passphrase-stdin`）得到 AES-256-GCM 加密包（魔数 `PBSB`）。manifest 的逐成员
@@ -360,7 +367,7 @@ cd studio
 | `agent_ledger` | 139 | 提案与协商状态机持久化、审计写入、忙闲缓存、幂等 |
 | `ws_protocol` | 103 | 行协议帧、指令语法、探活命令与错误帧唤醒、异常与超时 |
 | `supervisor` | 86 | 端口分配、隔离目录、包装脚本与首启名片、重连退避 |
-| `provisioning` | 66 | 建 Bot、`/_address`、名称与头像保留、复启与冷备复活幂等 |
+| `provisioning` | 74 | 建 Bot、`/_address`、名称与头像保留、复启与冷备复活幂等 |
 | `rules` | 60 | exact/prefix/regex/default 匹配与优先级 |
 | `router` | 78 | 关键词路由、工单号、模板与冷却 |
 | `gateway` | 94 | 入站管线、插件派发、更新缓冲 |
@@ -368,8 +375,9 @@ cd studio
 | `open_api` | 119 | 五个方法、鉴权、幂等、长轮询、webhook |
 | `web_admin` | 146 | 控制台路由、CSRF/Cookie、越权与审计 |
 | `i18n` | 320 | 18 语种完整性、协商、欢迎语、页面注入 |
-| `web_live` | 55 | 真实 ASGI 生命周期、WebSocket、冷备往返 |
-| `bundle` | 250 | 冷备导出/校验/篡改/跨账本迁移/幂等 |
+| `web_live` | 60 | 真实 ASGI 生命周期、WebSocket、冷备往返、隐私二维码 |
+| `invite_codec` | 76 | HKDF/ChaCha20 标准向量、跨语言邀请链接向量、随机 nonce、明文不泄漏、篡改拒绝 |
+| `bundle` | 281 | 冷备导出/校验/篡改/跨账本迁移/幂等、CLI `invite` 与 `--raw-links` |
 | `eco_cards` | 89 | `::POPOPX_ECO::` 卡片与 `::CB::` 回执编解码、越界字段拒绝 |
 | `ics` | 65 | RFC 5545 转义、UTC 时刻、UID/DUMPSTAMP、时长与跨天 |
 | `install` | 276 | 脚本语法与旗标、干跑、服务用户主组与 `--group` 一致性（含真跑 `create_service_user` 的无桩探针）、回环与零二进制捆绑、内置权重清单校验、无桩残留 |
@@ -378,7 +386,7 @@ cd studio
 | `guest_portal` | 571 | 令牌签发/验签/过期/撤销/次数预算、并发领取、脱敏空档、.ics 门槛、页面转义 |
 | `agent_engine` | 3552 | Needle 3 抽取与确定性回退、权重 SHA-256 门禁、偏好规则、话术与推理桥降级、密钥卫生 |
 | `agent_console` | 389 | `/api/agent/*` 与 `/book/*` 路由、鉴权、面板数据结构、18 语种词条 |
-| 合计 | **7155** | 23/23 组 0 失败，退出码 0 |
+| 合计 | **7275** | 24/24 组 0 失败，退出码 0 |
 
 ## 10. 运维与安全注意
 

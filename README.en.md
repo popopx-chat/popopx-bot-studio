@@ -20,8 +20,8 @@ account and no e-mail address.
 - Zero model downloads: `needle3.cact` (33.7 MiB, under 50 MB) ships inside the repository, is
   SHA-256 verified before loading, and is usable the moment the service starts. Without a C
   runtime or SDK the runtime falls back to the deterministic extractor in this repo (section 5).
-- Self-test gate: `python3 -m app.main --self-test` → **23 groups / 7155 real assertions /
-  0 failures / ~16 s / exit code 0**. It only needs `studio/tests/fake_popopx_cli.py`
+- Self-test gate: `python3 -m app.main --self-test` → **24 groups / 7275 real assertions /
+  0 failures / ~19 s / exit code 0**. It only needs `studio/tests/fake_popopx_cli.py`
   (a local stand-in that speaks the same wire protocol and keeps profiles in `bot_chat.db`,
   so it survives a restart like the real CLI) — no network, no SMP server.
 
@@ -100,7 +100,7 @@ start_macos.sh             everyday macOS launcher (venv, random token, --check/
 docker-compose.yml         orchestration (loopback publish only, cap_drop + no-new-privileges)
 .env.example               configuration template, 26 keys (stand-in, Mac Node, guest portal, reasoner)
 official_tools/
-  export_bot_bundle.py     offline cold backup: export / list / verify / restore (plain and AES-256-GCM)
+  export_bot_bundle.py     offline cold backup: export / list / verify / restore / invite (plain and AES-256-GCM)
   verify_needle_assets.py  SHA-256 manifest checker for the bundled Needle 3 weights
 studio/
   app/                     engine sources (see the diagram above)
@@ -198,6 +198,10 @@ Admin API, prefix `/api/admin`: `session` `overview` `bots` `bots/{id}` (plus
 `qrcode` `qr.png` `send` `contacts` `groups` `rules` `routing` `start` `stop` `restart`)
 `rules/{id}` `rules/preview` `routing/{id}` `routing/preview` `plugins` `plugins/{id}`
 `logs` `updates` `backup/export` `backup/import` `backups` `config` `i18n/parity`.
+`qrcode` and `qr.png` return an opaque `https://popopx.chat.<Base64URL ciphertext>` invite
+link by default (HKDF-SHA256 + ChaCha20-Poly1305, hiding `smpN.popopx.im` node hostnames);
+only the collapsed diagnostics block in the QR dialog and `qr.png?raw=1` reveal the raw
+`smp://` address.
 
 Stand-in admin API, prefix `/api/agent` (same `require_admin` guard): `summary`,
 `engine` (GET state / POST switch), `extract` (try a sentence), `prefs/{bot_id}` (GET/POST)
@@ -378,10 +382,15 @@ the chain. `password` fields are masked as `********` on both read and write pat
 ```bash
 cd studio
 ../.venv/bin/python ../official_tools/export_bot_bundle.py list
+../.venv/bin/python ../official_tools/export_bot_bundle.py invite --bot <id> --qr /secure/invite.png
 ../.venv/bin/python ../official_tools/export_bot_bundle.py export --bot <id> --out /secure/backups
 ../.venv/bin/python ../official_tools/export_bot_bundle.py verify /secure/backups/<name>.botbundle
 ../.venv/bin/python ../official_tools/export_bot_bundle.py restore --bundle <file> --data-dir <new-dir>
 ```
+
+`list` and `invite` only emit the opaque `https://popopx.chat.<Base64URL ciphertext>`
+invite link by default; `--raw` / `--raw-links` expose the raw `smp://` address and SMP
+server list for advanced diagnostics.
 
 Artifacts are `.botbundle` (gzip tar) plus the sidecar `<name>.botbundle.json`; with
 `--passphrase` (or `--passphrase-stdin`) you get an AES-256-GCM package (magic `PBSB`).
@@ -412,7 +421,7 @@ cd studio
 | `agent_ledger` | 139 | proposal and negotiation state persistence, audit writes, availability cache, idempotency |
 | `ws_protocol` | 103 | line-protocol frames, command grammar, probe commands and error-frame wake-ups, errors and timeouts |
 | `supervisor` | 86 | port allocation, isolated dirs, wrapper and first-launch profile name, reconnect backoff |
-| `provisioning` | 66 | Bot creation, `/_address`, name and avatar retention, restart and cold-restore idempotency |
+| `provisioning` | 74 | Bot creation, `/_address`, name and avatar retention, restart and cold-restore idempotency |
 | `rules` | 60 | exact/prefix/regex/default matching and priority |
 | `router` | 78 | keyword routing, ticket ids, templates and cooldown |
 | `gateway` | 94 | inbound pipeline, plugin dispatch, update buffer |
@@ -420,8 +429,9 @@ cd studio
 | `open_api` | 119 | five methods, auth, idempotency, long polling, webhook |
 | `web_admin` | 146 | console routes, CSRF/cookie, authorisation and audit |
 | `i18n` | 320 | 18-locale completeness, negotiation, welcome text, page injection |
-| `web_live` | 55 | real ASGI lifecycle, WebSocket, cold-backup round trip |
-| `bundle` | 250 | export/verify/tamper/cross-ledger migration/idempotency |
+| `web_live` | 60 | real ASGI lifecycle, WebSocket, cold-backup round trip, privacy QR |
+| `invite_codec` | 76 | HKDF/ChaCha20 standard vectors, cross-language invite vectors, random nonce, no plaintext leak, tamper rejection |
+| `bundle` | 281 | export/verify/tamper/cross-ledger migration/idempotency, CLI `invite` and `--raw-links` |
 | `eco_cards` | 89 | `::POPOPX_ECO::` card and `::CB::` receipt codec, rejection of out-of-contract fields |
 | `ics` | 65 | RFC 5545 escaping, UTC instants, UID/DUMPSTAMP, durations and day-spanning events |
 | `install` | 276 | script syntax and flags, dry runs, service-user primary group vs `--group` (including a stubbed real run of `create_service_user`), loopback and zero-bundling, bundled-weight manifest check, no stubs |
@@ -430,7 +440,7 @@ cd studio
 | `guest_portal` | 571 | token issue/verify/expiry/revocation/visit budget, concurrent claims, masked availability, the .ics gate, page escaping |
 | `agent_engine` | 3552 | Needle 3 extraction and the deterministic fallback, the weight SHA-256 gate, preference rules, copy and reasoner degradation, secret hygiene |
 | `agent_console` | 389 | `/api/agent/*` and `/book/*` routes, auth, panel data shapes, 18-locale strings |
-| total | **7155** | 23/23 groups, 0 failures, exit code 0 |
+| total | **7275** | 24/24 groups, 0 failures, exit code 0 |
 
 ## 10. Operations and security notes
 
