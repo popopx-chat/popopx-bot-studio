@@ -241,8 +241,12 @@ footer{border-top:1px solid var(--line);padding:clamp(34px,5vw,64px) 0 44px;back
 { "name": "support", "default_locale": "zh-Hans",
   "auto_accept": true, "accept_incognito": <span class="k">false</span> }
 
-<span class="t">→</span> { "bot": { "id": "b1", "port": 5230, "permanent_link": "https://…" } }
-<span class="t">GET</span> /api/admin/bots/b1/qrcode → { "data_url": "data:image/png;base64,…" }</pre>
+<span class="t">→</span> { "bot": { "id": "b1", "port": 5230, "permanent_link": "https://…" },
+  "i18n": { "locale": "zh-Hans", "welcome": "…" } }
+
+<span class="t">GET</span> /api/admin/bots/b1/qrcode
+<span class="t">→</span> { "link": "https://popopx.chat/i/v1/…", "raw_link": "https://…",
+  "opaque": true, "sha256": "…", "data_url": "data:image/png;base64,…" }</pre>
         </figure>
       </div>
 
@@ -286,7 +290,7 @@ footer{border-top:1px solid var(--line);padding:clamp(34px,5vw,64px) 0 44px;back
   <div class="api">
     <div><p class="m">GET</p><p class="p">/api/v1/getMe</p><p class="d">bot · can_send_messages</p></div>
     <div><p class="m">POST</p><p class="p">/api/v1/sendMessage</p><p class="d">chat_ref · text · quoted_message</p></div>
-    <div><p class="m">POST</p><p class="p">/api/v1/broadcastGroup</p><p class="d">known_groups · template</p></div>
+    <div><p class="m">POST</p><p class="p">/api/v1/broadcastGroup</p><p class="d">text · chat_ids · dry_run</p></div>
     <div><p class="m">POST</p><p class="p">/api/v1/setWebhook</p><p class="d">url · secret</p></div>
     <div><p class="m">GET</p><p class="p">/api/v1/getUpdates</p><p class="d">offset · limit · timeout</p></div>
     <div><p class="m g">GET</p><p class="p">/api/admin/overview</p><p class="d">X-Studio-Token</p></div>

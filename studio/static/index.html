@@ -87,9 +87,9 @@ td{padding:8px 10px;border-bottom:1px solid #131a23;vertical-align:middle;font-s
 tbody tr:hover{background:#0d131b}
 .st{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--mut);white-space:nowrap}
 .st b{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
-.st[data-s="running"],.st[data-s="ok"],.st[data-s="loaded"]{color:var(--acc)}
-.st[data-s="starting"],.st[data-s="partial"],.st[data-s="enabled"]{color:var(--warn)}
-.st[data-s="error"],.st[data-s="failed"],.st[data-s="disabled"]{color:var(--bad)}
+.st[data-s="running"],.st[data-s="ok"],.st[data-s="loaded"],.st[data-s="succeeded"]{color:var(--acc)}
+.st[data-s="starting"],.st[data-s="partial"],.st[data-s="enabled"],.st[data-s="queued"],.st[data-s="timeout"],.st[data-s="refused"],.st[data-s="cancelled"]{color:var(--warn)}
+.st[data-s="error"],.st[data-s="failed"],.st[data-s="disabled"],.st[data-s="off"]{color:var(--bad)}
 .trend{display:flex;align-items:flex-end;gap:5px;height:104px}
 .trend i{flex:1;min-height:2px;background:linear-gradient(180deg,var(--acc),rgba(15,156,134,.3));opacity:.85}
 .trend-x{display:flex;gap:5px;margin-top:6px;font:10px/1.3 var(--mono);color:var(--dim)}
@@ -190,6 +190,7 @@ details.cfg[open]>summary::before{content:"− "}
     <li><button type="button" data-view="agent"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.4" d="M3 4h10v8H3z"/><path fill="currentColor" d="M6 7h1v2H6zm3 0h1v2H9zM7 1h2v2H7z"/></svg><span data-i18n="nav_agent">Stand-in agent</span></button></li>
     <li><button type="button" data-view="guest"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 2h12v4H2zm0 6h5v6H2zm7 0h7v2H9zm0 4h7v2H9z"/></svg><span data-i18n="nav_guest">Guest booking</span></button></li>
     <li><button type="button" data-view="a2a"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.4" d="M2 4h5v8H2zm7 0h5v8H9zM7 8h2"/></svg><span data-i18n="nav_a2a">Scheduling audit</span></button></li>
+    <li><button type="button" data-view="orch"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.4" d="M8 1v3M8 12v3M2 6h12"/><circle cx="8" cy="8" r="2.4"/><circle cx="2.6" cy="6" r="1.4"/><circle cx="13.4" cy="6" r="1.4"/></svg><span data-i18n="nav_orch">Orchestration</span></button></li>
   </ul>
   <div class="railfoot"><span data-i18n="footer">AGPL-3.0-only · no bundled binaries · loopback only</span></div>
 </nav>
@@ -623,6 +624,71 @@ details.cfg[open]>summary::before{content:"− "}
   </div>
 </section>
 
+<section id="v-orch" hidden aria-labelledby="h-orch">
+  <div class="hd"><h1 id="h-orch" data-i18n="nav_orch">Orchestration</h1><span class="sp mono" id="oc-stamp"></span></div>
+  <p class="note" data-i18n="orch_policy">Local policy only: every cross-agent task needs an explicit grant and is written to the SQLite ledger before it runs.</p>
+  <div class="row">
+    <label class="fld" style="min-width:220px"><span>bot_id</span><select id="oc-bot"></select></label>
+    <button type="button" class="btn" id="btn-oc"><span data-i18n="action_refresh">Refresh</span></button>
+  </div>
+  <div class="grid g2 sect">
+    <div class="card">
+      <header><h2 data-i18n="orch_caps">Capabilities</h2><div class="sp"><span class="pill" id="oc-limits">limits</span></div></header>
+      <div class="bd"><div style="overflow-x:auto"><table>
+        <thead><tr><th>capability</th><th data-i18n="orch_available">Ready</th><th>args</th><th data-i18n="orch_reads">Reads</th></tr></thead>
+        <tbody id="oc-caps"></tbody>
+      </table></div></div>
+    </div>
+    <div class="card">
+      <header><h2 data-i18n="orch_grants">Grants</h2><div class="sp"><span class="pill" id="oc-stats">stats</span></div></header>
+      <div class="bd"><div style="overflow-x:auto"><table>
+        <thead><tr><th>origin → target</th><th>capability</th><th>hops</th><th data-i18n="orch_concurrent">Concurrent</th><th>timeout</th><th data-i18n="field_status">Status</th><th></th></tr></thead>
+        <tbody id="oc-grants"></tbody>
+      </table></div>
+      <form id="f-grant" class="grid gap sect">
+        <div class="grid g2 gap">
+          <label class="fld"><span data-i18n="orch_origin">Origin bot</span><select id="og-origin"></select></label>
+          <label class="fld"><span data-i18n="orch_target">Target bot</span><select id="og-target"></select></label>
+        </div>
+        <div class="grid g2 gap">
+          <label class="fld"><span data-i18n="orch_capability">Capability</span><select id="og-cap"></select></label>
+          <label class="fld"><span data-i18n="orch_timeout">Timeout (s)</span><input id="og-timeout" type="number" min="0.5" max="300" step="0.5" value="20" class="mono"></label>
+        </div>
+        <div class="grid g2 gap">
+          <label class="fld"><span data-i18n="orch_hops">Max hops</span><input id="og-hops" type="number" min="1" max="3" value="1" class="mono"></label>
+          <label class="fld"><span data-i18n="orch_concurrent">Concurrent</span><input id="og-conc" type="number" min="1" max="32" value="4" class="mono"></label>
+        </div>
+        <div class="row"><button type="submit" class="btn pri"><span data-i18n="orch_grant_add">Allow this route</span></button></div>
+      </form>
+      <p class="meta" style="margin:0">POST /api/agent/orch/grants</p></div>
+    </div>
+  </div>
+  <div class="card sect">
+    <header><h2 data-i18n="orch_dispatch">Dispatch</h2><div class="sp"><span class="mono meta" id="oc-thread"></span></div></header>
+    <div class="bd"><form id="f-dispatch" class="grid gap">
+      <div class="grid g3 gap">
+        <label class="fld"><span data-i18n="orch_origin">Origin bot</span><select id="od-origin"></select></label>
+        <label class="fld"><span data-i18n="orch_targets">Targets</span><input id="od-targets" class="mono" data-i18n-attr="placeholder:orch_targets_ph"></label>
+        <label class="fld"><span data-i18n="orch_capability">Capability</span><select id="od-cap"></select></label>
+      </div>
+      <label class="fld"><span>args</span><textarea id="od-args" rows="3" class="mono" spellcheck="false" placeholder='{"text": "hello"}'></textarea></label>
+      <div class="row">
+        <button type="submit" class="btn pri"><span data-i18n="orch_run">Run</span></button>
+        <button type="button" class="btn" id="oc-replay"><span data-i18n="orch_replay">Replay</span></button>
+      </div>
+    </form><pre id="od-out" class="sect">—</pre></div>
+  </div>
+  <div class="card sect">
+    <header><h2 data-i18n="orch_tasks">Tasks</h2><div class="sp"><span class="pill" id="oc-funnel">ledger</span></div></header>
+    <div class="bd"><div style="overflow-x:auto"><table>
+      <thead><tr><th>task</th><th>origin → target</th><th>capability</th><th data-i18n="field_status">Status</th><th>error</th><th data-i18n="orch_latency">Latency</th><th></th></tr></thead>
+      <tbody id="oc-tasks"></tbody>
+    </table></div>
+    <div id="oc-empty" hidden><p class="empty" data-i18n="orch_empty">No tasks dispatched yet.</p></div>
+    <pre id="oc-out" class="sect">—</pre></div>
+  </div>
+</section>
+
 </main>
 </div>
 </div>
@@ -645,10 +711,11 @@ details.cfg[open]>summary::before{content:"− "}
 <dialog id="d-qr" aria-labelledby="q-h">
   <h3 id="q-h" data-i18n="bots_qr">QR code</h3>
   <form>
+    <p class="note" id="q-note" hidden data-i18n="bots_qr_diag"></p>
     <dl class="kv"><dt data-i18n="bots_invite_link">Invite link</dt><dd id="q-link">—</dd><dt>sha256</dt><dd id="q-hash">—</dd></dl>
     <img id="q-img" width="230" height="230" data-i18n-attr="alt:bots_qr">
     <div class="row sect" style="justify-content:center"><a class="btn" id="q-png" href="#" target="_blank" rel="noopener">qr.png</a></div>
-    <details class="cfg sect">
+    <details class="cfg sect" id="q-drawer">
       <summary data-i18n="bots_raw_link">View original smp:// address (advanced diagnostics)</summary>
       <dl class="kv"><dt data-i18n="bots_permanent_link">Permanent address</dt><dd id="q-raw">—</dd></dl>
       <div class="row" style="margin-top:8px"><button type="button" class="btn sm" id="q-raw-copy"><span data-i18n="action_copy">Copy</span></button></div>
@@ -678,6 +745,21 @@ details.cfg[open]>summary::before{content:"− "}
     <span class="meta" data-i18n="a2a_approve">Approve</span>
     <span class="meta" data-i18n="a2a_decline">Decline</span>
     <span class="meta" data-i18n="guest_revoke">Revoke</span>
+  </div>
+</template>
+
+<template id="t-vocab">
+  <div class="row">
+    <span hidden data-i18n="bots_qr_none">No link available</span>
+    <span hidden data-i18n="orch_wildcard">Any Bot</span>
+    <span hidden data-i18n="orch_targets_ph">one bot id per line</span>
+    <span hidden data-i18n="orch_yes">yes</span>
+    <span hidden data-i18n="orch_no">no</span>
+    <span hidden data-i18n="orch_no_grants">No grant yet</span>
+    <span hidden data-i18n="orch_revoke">Revoke</span>
+    <span hidden data-i18n="orch_cancel">Cancel</span>
+    <span hidden data-i18n="orch_same_bot">Same Bot</span>
+    <span hidden data-i18n="orch_no_thread">No thread</span>
   </div>
 </template>
 
@@ -906,6 +988,12 @@ details.cfg[open]>summary::before{content:"− "}
       p2(d.getHours()) + ":" + p2(d.getMinutes()) + ":" + p2(d.getSeconds());
   }
 
+  function copyOrWarn(text) {
+    // 诊断模式下两个字段都是空的：这时候"复制成功"是最有误导性的反馈。
+    var value = String(text == null ? "" : text);
+    if (!value) { toast(t("msg_error"), t("bots_qr_none"), true); return; }
+    copy(value);
+  }
   function copy(text) {
     text = String(text == null ? "" : text);
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -976,7 +1064,12 @@ details.cfg[open]>summary::before{content:"− "}
         var data;
         try { data = raw ? JSON.parse(raw) : {}; }
         catch (e) { throw new Error("HTTP " + res.status + " · " + raw.slice(0, 140)); }
-        if (!res.ok || data.ok === false) throw new Error(describe(data, res.status));
+        if (!res.ok || data.ok === false) {
+          var err = new Error(describe(data, res.status));
+          // 状态码跟着错误走：/qrcode 的 409 要打开诊断抽屉，401/404 仍旧只弹提示。
+          err.status = res.status;
+          throw err;
+        }
         return data;
       });
     });
@@ -1166,20 +1259,47 @@ details.cfg[open]>summary::before{content:"− "}
     if (b.default_locale) get("e-locale").value = b.default_locale;
     get("card-new").classList.add("live");
   }
+  function qrFill(d) {
+    S.qrLink = String(d.link || "");
+    S.rawLink = String(d.raw_link || "");
+    get("q-link").textContent = S.qrLink || "—";
+    get("q-hash").textContent = String(d.sha256 || "—");
+    get("q-raw").textContent = S.rawLink || t("bots_qr_none");
+    var img = get("q-img");
+    img.src = String(d.data_url || "");
+    img.hidden = !d.data_url;
+  }
+  function qrDiag(message) {
+    // 取不到二维码 ≠ 什么都没有：把失败原因摊在诊断说明里，抽屉照常打开，
+    // 但绝不伪造一个地址 —— 没有永久地址时原本就没有可复制的原始值。
+    S.qrLink = ""; S.rawLink = "";
+    get("q-link").textContent = "—";
+    get("q-hash").textContent = "—";
+    get("q-raw").textContent = "—";
+    get("q-img").removeAttribute("src");
+    get("q-img").hidden = true;
+    var note = get("q-note");
+    note.textContent = message ? (t("bots_qr_diag") + " · " + message) : t("bots_qr_diag");
+    note.hidden = false;
+    note.classList.add("bad");
+    get("q-drawer").open = true;
+  }
   function showQr(id) {
+    var note = get("q-note"), drawer = get("q-drawer");
+    // 先清空上一位 Bot 的链接：失败路径也要打开对话框，残留值会被复制成别人的邀请链接。
+    S.qrLink = ""; S.rawLink = "";
+    note.hidden = true;
+    note.classList.remove("bad");
+    drawer.open = false;
+    get("q-png").href = url(API + "/bots/" + encodeURIComponent(id) + "/qr.png");
     api(API + "/bots/" + encodeURIComponent(id) + "/qrcode").then(function (d) {
-      S.qrLink = String(d.link || "");
-      S.rawLink = String(d.raw_link || "");
-      get("q-link").textContent = S.qrLink || "—";
-      get("q-raw").textContent = S.rawLink || "—";
-      get("q-hash").textContent = String(d.sha256 || "—");
-      var img = get("q-img");
-      img.src = String(d.data_url || "");
-      img.hidden = !d.data_url;
-      get("q-png").href = url(API + "/bots/" + encodeURIComponent(id) + "/qr.png");
+      qrFill(d);
       openDlg(get("d-qr"));
       get("q-cancel").focus();
-    }).catch(guard());
+    }).catch(function (e) {
+      if (e && e.status === 409) { qrDiag(e.message); openDlg(get("d-qr")); get("q-cancel").focus(); return; }
+      guard()(e);
+    });
   }
 
   /* =============================================================== 3 rules */
@@ -1734,6 +1854,110 @@ details.cfg[open]>summary::before{content:"− "}
     }).catch(guard());
   }
 
+  /* ========================================================= orchestration */
+  var ORCH = AGENT_API + "/orch";
+  function ocBot() { return get("oc-bot").value; }
+  function ocStamp(d) {
+    get("oc-stamp").textContent = "orchestrator";
+    pill(get("oc-limits"), "hops:" + num((d.limits || {}).max_hops) +
+      " fanout:" + num((d.limits || {}).max_fanout));
+    pill(get("oc-stats"), objText(d.stats || {}));
+    pill(get("oc-funnel"), objText((d.ledger || {}).by_status || {}),
+      !((d.ledger || {}).by_status || {}).failed);
+  }
+  function loadOrch() {
+    botOptions(get("oc-bot"), true);
+    return api(ORCH + (ocBot() ? "?bot_id=" + encodeURIComponent(ocBot()) : "")).then(function (d) {
+      ocStamp(d);
+      renderCaps(d.capabilities || []);
+      renderGrants(d.grants || []);
+      renderTasks(d.tasks || []);
+      return d;
+    }).catch(guard());
+  }
+  function renderCaps(caps) {
+    var body = get("oc-caps");
+    body.textContent = "";
+    var sel = get("og-cap"), odcap = get("od-cap"), keep = sel.value, keepd = odcap.value;
+    sel.textContent = ""; odcap.textContent = "";
+    caps.forEach(function (c) {
+      var tr = el("tr");
+      tr.appendChild(el("td", "mono", c.capability));
+      tr.appendChild(el("td")).appendChild(st(c.available ? "ok" : "off",
+        c.available ? t("orch_yes") : t("orch_no")));
+      tr.appendChild(el("td", "mono", (c.required || []).join("+") +
+        ((c.optional || []).length ? " · " + c.optional.join(" ") : "")));
+      tr.appendChild(el("td", "mono", (c.reads || []).join(" ")));
+      body.appendChild(tr);
+      sel.appendChild(new Option(c.capability, c.capability));
+      if (c.available) odcap.appendChild(new Option(c.capability, c.capability));
+    });
+    if (keep) sel.value = keep;
+    if (keepd) odcap.value = keepd;
+  }
+  function renderGrants(rows) {
+    var body = get("oc-grants");
+    body.textContent = "";
+    if (!rows.length) body.appendChild(el("tr")).appendChild(el("td", "meta", t("orch_no_grants")));
+    rows.forEach(function (g) {
+      var tr = el("tr");
+      tr.appendChild(el("td", "mono", shortBot(g.origin_bot_id) + " → " + shortBot(g.target_bot_id)));
+      tr.appendChild(el("td", "mono", g.capability === "*" ? t("orch_wildcard") : g.capability));
+      tr.appendChild(el("td", "mono", num(g.max_hops)));
+      tr.appendChild(el("td", "mono", num(g.max_concurrent)));
+      tr.appendChild(el("td", "mono", num(g.timeout_seconds) + "s"));
+      tr.appendChild(el("td")).appendChild(st(g.enabled ? "ok" : "off",
+        g.enabled ? "enabled" : "disabled"));
+      var td = el("td", "row");
+      td.appendChild(btn(t("orch_revoke"), "sm dgr", function () {
+        api(ORCH + "/grants/" + encodeURIComponent(g.id) + "/delete", { method: "POST" })
+          .then(function () { toast(t("msg_saved"), "grant " + g.id); loadOrch(); }).catch(guard());
+      }));
+      tr.appendChild(td);
+      body.appendChild(tr);
+    });
+  }
+  function renderTasks(rows) {
+    var body = get("oc-tasks");
+    body.textContent = "";
+    get("oc-empty").hidden = rows.length > 0;
+    rows.forEach(function (k) {
+      var tr = el("tr");
+      tr.appendChild(el("td", "mono", String(k.id || "").slice(0, 10)));
+      tr.appendChild(el("td", "mono", shortBot(k.origin_bot_id) + " → " + shortBot(k.target_bot_id)));
+      tr.appendChild(el("td", "mono", k.capability));
+      tr.appendChild(el("td")).appendChild(st(k.status, k.status));
+      tr.appendChild(el("td", "mono", [k.error_code, k.detail].filter(Boolean).join(" · ") || "—"));
+      tr.appendChild(el("td", "mono", k.latency_ms == null ? "—" : num(k.latency_ms) + "ms"));
+      var td = el("td", "row");
+      td.appendChild(btn(t("action_copy"), "sm", function () {
+        api(ORCH + "/tasks/" + encodeURIComponent(k.id)).then(function (d) {
+          get("oc-out").textContent = json(d);
+        }).catch(guard());
+      }));
+      if (k.status === "running") td.appendChild(btn(t("orch_cancel"), "sm dgr", function () {
+        api(ORCH + "/tasks/" + encodeURIComponent(k.id) + "/cancel", { method: "POST" })
+          .then(function () { loadOrch(); }).catch(guard());
+      }));
+      tr.appendChild(td);
+      body.appendChild(tr);
+    });
+  }
+  function shortBot(id) { return String(id || "").replace(/^bot_/, "").replace(/_[a-f0-9]{8}$/, ""); }
+  function dispatchBody() {
+    var raw = get("od-args").value.trim(), args = {};
+    if (raw) {
+      try { args = JSON.parse(raw); }
+      catch (e) { toast(t("msg_error"), "args: invalid JSON", true); return null; }
+      if (!args || typeof args !== "object" || Array.isArray(args)) {
+        toast(t("msg_error"), "args: object required", true); return null;
+      }
+    }
+    var targets = get("od-targets").value.split(/[,\s]+/).filter(Boolean);
+    return { origin_bot_id: get("od-origin").value, targets: targets,
+             capability: get("od-cap").value, args: args };
+  }
+
   /* ======================================================= dialogs, views */
   function askDelete(target, then) {
     S.pendingDelete = then;
@@ -1742,7 +1966,8 @@ details.cfg[open]>summary::before{content:"− "}
     get("x-cancel").focus();
   }
   var LOADERS = { dashboard: loadDashboard, bots: loadBots, rules: loadRules, routing: loadRouting,
-                  plugins: loadPlugins, agent: loadAgent, guest: loadGuest, a2a: loadA2A };
+                  plugins: loadPlugins, agent: loadAgent, guest: loadGuest, a2a: loadA2A,
+                  orch: loadOrch };
   function showView(name) {
     S.view = name;
     var secs = document.querySelectorAll(".views > section");
@@ -1831,8 +2056,8 @@ details.cfg[open]>summary::before{content:"− "}
       if (fn) fn();
     });
     on(get("q-cancel"), "click", function () { closeDlg(get("d-qr")); });
-    on(get("q-copy"), "click", function () { copy(S.qrLink); });
-    on(get("q-raw-copy"), "click", function () { copy(S.rawLink); });
+    on(get("q-copy"), "click", function () { copyOrWarn(S.qrLink); });
+    on(get("q-raw-copy"), "click", function () { copyOrWarn(S.rawLink); });
 
     on(get("f-new"), "submit", function (ev) {
       ev.preventDefault();
@@ -2028,6 +2253,54 @@ details.cfg[open]>summary::before{content:"− "}
         toast(t("msg_saved"), "negotiation " + String(d.negotiation_id || "").slice(0, 8));
         loadProposals();
         loadAudit();
+      }).catch(guard());
+    });
+
+    /* ------------------------------------------------------- orchestration */
+    on(get("btn-oc"), "click", loadOrch);
+    on(get("oc-bot"), "change", loadOrch);
+    botOptions(get("og-origin")); botOptions(get("og-target")); botOptions(get("od-origin"));
+    on(get("f-grant"), "submit", function (ev) {
+      ev.preventDefault();
+      var origin = get("og-origin").value, target = get("og-target").value;
+      if (!origin || !target) { toast(t("msg_error"), "origin | target", true); return; }
+      if (origin === target) { toast(t("msg_error"), t("orch_same_bot"), true); return; }
+      api(ORCH + "/grants", { method: "POST", body: {
+        origin_bot_id: origin, target_bot_id: target, capability: get("og-cap").value,
+        max_hops: Number(get("og-hops").value || 1),
+        max_concurrent: Number(get("og-conc").value || 4),
+        timeout_seconds: Number(get("og-timeout").value || 20)
+      } }).then(function (d) {
+        toast(t("msg_saved"), "grant " + String((d.grant || {}).id || ""));
+        loadOrch();
+      }).catch(guard());
+    });
+    on(get("f-dispatch"), "submit", function (ev) {
+      ev.preventDefault();
+      var body = dispatchBody();
+      if (!body) return;
+      if (!body.origin_bot_id || !body.targets.length || !body.capability) {
+        toast(t("msg_error"), "origin | targets | capability", true); return;
+      }
+      var multi = body.targets.length > 1;
+      var path = multi ? ORCH + "/fanout" : ORCH + "/dispatch";
+      if (!multi) { body.target_bot_id = body.targets[0]; delete body.targets; }
+      api(path, { method: "POST", body: body }).then(function (d) {
+        var out = d.task || d.fanout || {};
+        get("od-out").textContent = json(d);
+        get("oc-thread").textContent = "correlation: " + String(out.correlation_id ||
+          (d.task || {}).correlation_id || "—");
+        var status = out.status || (multi ? out.succeeded + "/" + out.total : "—");
+        toast(multi && out.partial ? t("msg_error") : t("msg_saved"), String(status), !!out.partial);
+        loadOrch();
+      }).catch(guard());
+    });
+    on(get("oc-replay"), "click", function () {
+      var thread = (get("oc-thread").textContent.split("correlation:")[1] || "").trim();
+      if (!thread || thread === "—") { toast(t("msg_error"), t("orch_no_thread"), true); return; }
+      api(ORCH + "/replay?correlation_id=" + encodeURIComponent(thread)).then(function (d) {
+        get("od-out").textContent = json({ tree: d.tree, events: d.events, statuses: d.statuses });
+        get("oc-out").textContent = json(d.audit);
       }).catch(guard());
     });
   }

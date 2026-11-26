@@ -8,6 +8,7 @@ records every applied step so an install can be upgraded in place.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import secrets
@@ -20,7 +21,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .config import SECURE_FILE_MODE
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _ID_RE = re.compile(r"^[a-z0-9_-]{3,64}$")
 TRIGGER_TYPES = ("exact", "prefix", "regex", "default")
@@ -35,6 +36,26 @@ PROPOSAL_SOURCES = ("a2a", "guest", "direct", "operator")
 NEGOTIATION_STATUSES = ("open", "converged", "rejected", "expired", "aborted")
 GUEST_LINK_STATUSES = ("active", "exhausted", "revoked", "expired")
 GUEST_ROLES = ("visitor", "bot", "owner")
+#: 跨 Agent 编排的任务状态机：``queued → running → succeeded|failed|timeout|cancelled``，
+#: ``refused`` 是策略闸在派发前就落定的终态（无授权、目标不在线、跳数或并发超预算）。
+TASK_STATUSES = (
+    "queued",
+    "running",
+    "succeeded",
+    "failed",
+    "timeout",
+    "refused",
+    "cancelled",
+)
+#: 授权范围里 ``capability`` 允许的通配值：一条授权覆盖全部已注册能力。
+GRANT_WILDCARD = "*"
+GRANT_CAPABILITY_RE = re.compile(r"^[a-z][a-z0-9_.\-]{2,63}$")
+#: 跳数上限。1 表示"只许直接派一层"，编排层靠它把 A→B→A 的环在写库之前就掐掉。
+MAX_TASK_HOPS = 3
+MAX_TASK_CONCURRENCY = 32
+TASK_TIMEOUT_MIN_SECONDS = 0.5
+TASK_TIMEOUT_MAX_SECONDS = 300.0
+TASK_RESULT_MAX_CHARS = 200000
 AUDIT_STAGES = (
     "needle",
     "preference",
@@ -45,6 +66,7 @@ AUDIT_STAGES = (
     "guest",
     "ics",
     "lifecycle",
+    "orchestrator",
 )
 AUDIT_LEVELS = ("info", "warn", "error")
 
@@ -326,6 +348,86 @@ _MIGRATIONS: Tuple[Tuple[int, str, Tuple[str, ...]], ...] = (
             "CREATE INDEX IF NOT EXISTS idx_calendar_cache_expiry ON calendar_cache (expires_at)",
         ),
     ),
+    (
+        6,
+        "跨 Agent 编排：策略授权、任务账本、审计关联回放",
+        (
+            """
+            CREATE TABLE IF NOT EXISTS agent_task_grants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                origin_bot_id TEXT NOT NULL,
+                target_bot_id TEXT NOT NULL,
+                capability TEXT NOT NULL,
+                max_hops INTEGER NOT NULL DEFAULT 1,
+                max_concurrent INTEGER NOT NULL DEFAULT 4,
+                timeout_seconds REAL NOT NULL DEFAULT 20,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                UNIQUE (origin_bot_id, target_bot_id, capability)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_agent_task_grants_origin "
+            "ON agent_task_grants (origin_bot_id, enabled)",
+            """
+            CREATE TABLE IF NOT EXISTS agent_tasks (
+                id TEXT PRIMARY KEY,
+                correlation_id TEXT NOT NULL,
+                parent_id TEXT NOT NULL DEFAULT '',
+                origin_bot_id TEXT NOT NULL,
+                target_bot_id TEXT NOT NULL,
+                capability TEXT NOT NULL,
+                args_json TEXT NOT NULL DEFAULT '{}',
+                status TEXT NOT NULL CHECK (status IN
+                    ('queued','running','succeeded','failed','timeout','refused','cancelled')),
+                result_json TEXT NOT NULL DEFAULT '',
+                error_code TEXT NOT NULL DEFAULT '',
+                detail TEXT NOT NULL DEFAULT '',
+                hops INTEGER NOT NULL DEFAULT 1,
+                timeout_seconds REAL NOT NULL DEFAULT 20,
+                created_at REAL NOT NULL,
+                started_at REAL NOT NULL DEFAULT 0,
+                finished_at REAL NOT NULL DEFAULT 0,
+                latency_ms REAL NOT NULL DEFAULT 0
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_agent_tasks_origin ON agent_tasks (origin_bot_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_agent_tasks_parent ON agent_tasks (parent_id)",
+            "CREATE INDEX IF NOT EXISTS idx_agent_tasks_correlation "
+            "ON agent_tasks (correlation_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_agent_tasks_target ON agent_tasks (target_bot_id, status)",
+            """
+            CREATE TABLE IF NOT EXISTS negotiation_audit_v6 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bot_id TEXT NOT NULL DEFAULT '',
+                stage TEXT NOT NULL CHECK (stage IN
+                    ('needle','preference','reasoner','mac_node','a2a','card','guest','ics','lifecycle',
+                     'orchestrator')),
+                event TEXT NOT NULL,
+                level TEXT NOT NULL DEFAULT 'info' CHECK (level IN ('info','warn','error')),
+                proposal_id TEXT NOT NULL DEFAULT '',
+                negotiation_id TEXT NOT NULL DEFAULT '',
+                link_id TEXT NOT NULL DEFAULT '',
+                chat_ref TEXT NOT NULL DEFAULT '',
+                correlation_id TEXT NOT NULL DEFAULT '',
+                detail TEXT NOT NULL DEFAULT '',
+                data TEXT NOT NULL DEFAULT '{}',
+                latency_ms REAL NOT NULL DEFAULT 0,
+                ts REAL NOT NULL
+            )
+            """,
+            "INSERT INTO negotiation_audit_v6 (id, bot_id, stage, event, level, proposal_id, "
+            "negotiation_id, link_id, chat_ref, correlation_id, detail, data, latency_ms, ts) "
+            "SELECT id, bot_id, stage, event, level, proposal_id, negotiation_id, link_id, "
+            "chat_ref, '', detail, data, latency_ms, ts FROM negotiation_audit",
+            "DROP TABLE negotiation_audit",
+            "ALTER TABLE negotiation_audit_v6 RENAME TO negotiation_audit",
+            "CREATE INDEX IF NOT EXISTS idx_negotiation_audit_bot_ts ON negotiation_audit (bot_id, ts)",
+            "CREATE INDEX IF NOT EXISTS idx_negotiation_audit_proposal ON negotiation_audit (proposal_id, ts)",
+            "CREATE INDEX IF NOT EXISTS idx_negotiation_audit_correlation "
+            "ON negotiation_audit (correlation_id, ts)",
+        ),
+    ),
 )
 
 
@@ -350,6 +452,15 @@ def new_proposal_id() -> str:
 
 def new_negotiation_id() -> str:
     return f"ng_{secrets.token_hex(6)}"
+
+
+def new_task_id() -> str:
+    return f"tk_{secrets.token_hex(6)}"
+
+
+def new_thread_id() -> str:
+    """一次编排（含扇出的所有子任务）共用一个关联号，审计回放按它取。"""
+    return f"th_{secrets.token_hex(6)}"
 
 
 def new_guest_link_id() -> str:
@@ -1622,6 +1733,7 @@ class Database:
         negotiation_id: str = "",
         link_id: str = "",
         chat_ref: str = "",
+        correlation_id: str = "",
         detail: str = "",
         data: Optional[Dict[str, Any]] = None,
         latency_ms: float = 0.0,
@@ -1634,8 +1746,8 @@ class Database:
             cursor = self.conn.execute(
                 """
                 INSERT INTO negotiation_audit (bot_id, stage, event, level, proposal_id, negotiation_id,
-                    link_id, chat_ref, detail, data, latency_ms, ts)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    link_id, chat_ref, correlation_id, detail, data, latency_ms, ts)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     bot_id or "",
@@ -1646,6 +1758,7 @@ class Database:
                     negotiation_id,
                     link_id,
                     chat_ref,
+                    correlation_id or "",
                     detail[:500],
                     _json_dump(data or {}, label="审计数据"),
                     float(latency_ms),
@@ -1662,6 +1775,7 @@ class Database:
         stage: Optional[str] = None,
         level: Optional[str] = None,
         proposal_id: Optional[str] = None,
+        correlation_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         limit = max(1, min(int(limit), 1000))
         clauses: List[str] = []
@@ -1678,12 +1792,37 @@ class Database:
         if proposal_id is not None:
             clauses.append("proposal_id = ?")
             params.append(proposal_id)
+        if correlation_id is not None:
+            clauses.append("correlation_id = ?")
+            params.append(correlation_id)
         where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
         params.append(limit)
         with self._lock:
             rows = _rows(
                 self.conn.execute(
                     f"SELECT * FROM negotiation_audit {where}ORDER BY ts DESC LIMIT ?", params
+                )
+            )
+        for row in rows:
+            row["data"] = _json_load(row.get("data"), {})
+        return rows
+
+    def audit_replay(self, correlation_id: str, *, limit: int = 500) -> List[Dict[str, Any]]:
+        """回放一条编排线程上的全部审计，按时间正序 —— 派活的因果顺序不能倒着读。
+
+        只按 ``correlation_id`` 取，不按 bot 取：一次扇出会横跨发起方与被派方多个 Bot，
+        按 Bot 过滤正好把要看的跨 Agent 那段切掉。
+        """
+        wanted = (correlation_id or "").strip()
+        if not wanted:
+            raise LedgerError("回放需要 correlation_id")
+        limit = max(1, min(int(limit), 2000))
+        with self._lock:
+            rows = _rows(
+                self.conn.execute(
+                    "SELECT * FROM negotiation_audit WHERE correlation_id = ? "
+                    "ORDER BY ts ASC, id ASC LIMIT ?",
+                    (wanted, limit),
                 )
             )
         for row in rows:
@@ -1781,6 +1920,296 @@ class Database:
             )
         return int(cursor.rowcount or 0)
 
+    # ------------------------------------------------------ cross-agent tasks
+    def grant_agent_task(
+        self,
+        origin_bot_id: str,
+        target_bot_id: str,
+        capability: str,
+        *,
+        max_hops: int = 1,
+        max_concurrent: int = 4,
+        timeout_seconds: float = 20.0,
+        enabled: bool = True,
+    ) -> Dict[str, Any]:
+        """写入或更新一条跨 Agent 派活授权；同 (origin,target,capability) 幂等覆盖。
+
+        授权是**默认拒绝**的：没有这行，编排层一律 ``refused``，不存在"没配就等于能派"。
+        """
+        origin = _require_agent_id(origin_bot_id, "origin_bot_id")
+        target = _require_agent_id(target_bot_id, "target_bot_id")
+        scope = _require_capability(capability)
+        hops = max(1, min(int(max_hops), MAX_TASK_HOPS))
+        concurrent = max(1, min(int(max_concurrent), MAX_TASK_CONCURRENCY))
+        seconds = _clamp_task_timeout(timeout_seconds)
+        moment = time.time()
+        with self._lock:
+            existing = self.conn.execute(
+                "SELECT id FROM agent_task_grants "
+                "WHERE origin_bot_id = ? AND target_bot_id = ? AND capability = ?",
+                (origin, target, scope),
+            ).fetchone()
+            if existing is None:
+                cursor = self.conn.execute(
+                    """
+                    INSERT INTO agent_task_grants (origin_bot_id, target_bot_id, capability,
+                        max_hops, max_concurrent, timeout_seconds, enabled, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (origin, target, scope, hops, concurrent, seconds, 1 if enabled else 0, moment, moment),
+                )
+                grant_id = int(cursor.lastrowid or 0)
+            else:
+                grant_id = int(existing["id"])
+                self.conn.execute(
+                    "UPDATE agent_task_grants SET max_hops = ?, max_concurrent = ?, "
+                    "timeout_seconds = ?, enabled = ?, updated_at = ? WHERE id = ?",
+                    (hops, concurrent, seconds, 1 if enabled else 0, moment, grant_id),
+                )
+        row = self.get_grant(grant_id)
+        if row is None:
+            raise LedgerError("授权写入后读不到")
+        return row
+
+    def get_grant(self, grant_id: int) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM agent_task_grants WHERE id = ?", (int(grant_id),)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def find_grant(self, origin_bot_id: str, target_bot_id: str, capability: str) -> Optional[Dict[str, Any]]:
+        """取生效授权：精确能力优先，其次通配。禁用行永不返回。"""
+        origin = _require_agent_id(origin_bot_id, "origin_bot_id")
+        target = _require_agent_id(target_bot_id, "target_bot_id")
+        scope = _require_capability(capability)
+        with self._lock:
+            rows = _rows(
+                self.conn.execute(
+                    "SELECT * FROM agent_task_grants WHERE origin_bot_id = ? AND target_bot_id = ? "
+                    "AND capability IN (?, ?) AND enabled = 1",
+                    (origin, target, scope, GRANT_WILDCARD),
+                )
+            )
+        for row in rows:
+            if row["capability"] == scope:
+                return row
+        for row in rows:
+            if row["capability"] == GRANT_WILDCARD:
+                return row
+        return None
+
+    def list_grants(
+        self,
+        *,
+        origin_bot_id: Optional[str] = None,
+        target_bot_id: Optional[str] = None,
+        enabled_only: bool = False,
+    ) -> List[Dict[str, Any]]:
+        clauses: List[str] = []
+        params: List[Any] = []
+        if origin_bot_id is not None:
+            clauses.append("origin_bot_id = ?")
+            params.append(origin_bot_id)
+        if target_bot_id is not None:
+            clauses.append("target_bot_id = ?")
+            params.append(target_bot_id)
+        if enabled_only:
+            clauses.append("enabled = 1")
+        where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+        with self._lock:
+            rows = _rows(
+                self.conn.execute(
+                    f"SELECT * FROM agent_task_grants {where}ORDER BY origin_bot_id, target_bot_id, capability",
+                    params,
+                )
+            )
+        return rows
+
+    def set_grant_enabled(self, grant_id: int, enabled: bool) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            cursor = self.conn.execute(
+                "UPDATE agent_task_grants SET enabled = ?, updated_at = ? WHERE id = ?",
+                (1 if enabled else 0, time.time(), int(grant_id)),
+            )
+        if not cursor.rowcount:
+            return None
+        return self.get_grant(grant_id)
+
+    def delete_grant(self, grant_id: int) -> bool:
+        with self._lock:
+            cursor = self.conn.execute("DELETE FROM agent_task_grants WHERE id = ?", (int(grant_id),))
+        return bool(cursor.rowcount)
+
+    def create_task(
+        self,
+        *,
+        correlation_id: str,
+        origin_bot_id: str,
+        target_bot_id: str,
+        capability: str,
+        parent_id: str = "",
+        args: Optional[Dict[str, Any]] = None,
+        status: str = "queued",
+        hops: int = 1,
+        timeout_seconds: float = 20.0,
+    ) -> Dict[str, Any]:
+        if status not in TASK_STATUSES:
+            raise LedgerError(f"非法任务状态 {status!r}")
+        task_id = new_task_id()
+        moment = time.time()
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO agent_tasks (id, correlation_id, parent_id, origin_bot_id, target_bot_id,
+                    capability, args_json, status, hops, timeout_seconds, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task_id,
+                    correlation_id,
+                    parent_id or "",
+                    _require_agent_id(origin_bot_id, "origin_bot_id"),
+                    _require_agent_id(target_bot_id, "target_bot_id"),
+                    _require_capability(capability),
+                    _json_dump(args or {}, label="任务入参"),
+                    status,
+                    max(1, min(int(hops), MAX_TASK_HOPS)),
+                    _clamp_task_timeout(timeout_seconds),
+                    moment,
+                ),
+            )
+        row = self.get_task(task_id)
+        if row is None:
+            raise LedgerError("任务写入后读不到")
+        return row
+
+    def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            row = self.conn.execute("SELECT * FROM agent_tasks WHERE id = ?", (task_id,)).fetchone()
+        return _task_record(row) if row else None
+
+    def task_children(self, parent_id: str) -> List[Dict[str, Any]]:
+        with self._lock:
+            rows = _rows(
+                self.conn.execute(
+                    "SELECT * FROM agent_tasks WHERE parent_id = ? ORDER BY created_at, id", (parent_id,)
+                )
+            )
+        return [_task_record(row) for row in rows]
+
+    def update_task(self, task_id: str, **fields: Any) -> Optional[Dict[str, Any]]:
+        """只允许改这几个列；``id`` / ``correlation_id`` / ``created_at`` 不可动。"""
+        allowed = {
+            "status",
+            "result_json",
+            "error_code",
+            "detail",
+            "started_at",
+            "finished_at",
+            "latency_ms",
+            "args_json",
+        }
+        unknown = set(fields) - allowed
+        if unknown:
+            raise LedgerError(f"任务字段不可写: {sorted(unknown)}")
+        if "status" in fields and fields["status"] not in TASK_STATUSES:
+            raise LedgerError(f"非法任务状态 {fields['status']!r}")
+        if not fields:
+            return self.get_task(task_id)
+        assignments = ", ".join(f"{key} = ?" for key in fields)
+        with self._lock:
+            cursor = self.conn.execute(
+                f"UPDATE agent_tasks SET {assignments} WHERE id = ?", [*fields.values(), task_id]
+            )
+        if not cursor.rowcount:
+            return None
+        return self.get_task(task_id)
+
+    def list_tasks(
+        self,
+        *,
+        bot_id: Optional[str] = None,
+        status: Optional[str] = None,
+        capability: Optional[str] = None,
+        correlation_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        limit = max(1, min(int(limit), 1000))
+        clauses: List[str] = []
+        params: List[Any] = []
+        if bot_id is not None:
+            clauses.append("(origin_bot_id = ? OR target_bot_id = ?)")
+            params.extend([bot_id, bot_id])
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        if capability is not None:
+            clauses.append("capability = ?")
+            params.append(capability)
+        if correlation_id is not None:
+            clauses.append("correlation_id = ?")
+            params.append(correlation_id)
+        where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+        params.append(limit)
+        with self._lock:
+            rows = _rows(
+                self.conn.execute(
+                    f"SELECT * FROM agent_tasks {where}ORDER BY created_at DESC, id DESC LIMIT ?", params
+                )
+            )
+        return [_task_record(row) for row in rows]
+
+    def count_active_tasks(self, target_bot_id: str, capability: Optional[str] = None) -> int:
+        """并发预算的计数口径只算 running —— queued 不占额度，否则自我饿死。"""
+        sql = "SELECT COUNT(*) FROM agent_tasks WHERE target_bot_id = ? AND status = 'running'"
+        params: List[Any] = [target_bot_id]
+        if capability is not None:
+            sql += " AND capability = ?"
+            params.append(capability)
+        with self._lock:
+            return int(self.conn.execute(sql, params).fetchone()[0])
+
+    def task_stats(self, bot_id: Optional[str] = None) -> Dict[str, Any]:
+        clauses: List[str] = []
+        params: List[Any] = []
+        if bot_id is not None:
+            clauses.append("(origin_bot_id = ? OR target_bot_id = ?)")
+            params.extend([bot_id, bot_id])
+        where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+        with self._lock:
+            by_status = _rows(
+                self.conn.execute(
+                    f"SELECT status, COUNT(*) AS total FROM agent_tasks {where}"
+                    "GROUP BY status ORDER BY status",
+                    params,
+                )
+            )
+            by_capability = _rows(
+                self.conn.execute(
+                    f"SELECT capability, COUNT(*) AS total, AVG(latency_ms) AS avg_latency_ms "
+                    f"FROM agent_tasks {where}GROUP BY capability ORDER BY capability",
+                    params,
+                )
+            )
+            grant_sql = "SELECT COUNT(*) FROM agent_task_grants WHERE enabled = 1"
+            if bot_id is not None:
+                grant_sql += " AND (origin_bot_id = ? OR target_bot_id = ?)"
+            grants = int(self.conn.execute(grant_sql, params if bot_id is not None else ()).fetchone()[0])
+        return {
+            "by_status": {row["status"]: int(row["total"]) for row in by_status},
+            "by_capability": [
+                {
+                    "capability": row["capability"],
+                    "total": int(row["total"]),
+                    "avg_latency_ms": round(float(row["avg_latency_ms"] or 0.0), 3),
+                }
+                for row in by_capability
+            ],
+            "active_grants": grants,
+            "total": sum(int(row["total"]) for row in by_status),
+        }
+
     # ------------------------------------------------------------- agent total
     def agent_snapshot(self, bot_id: Optional[str] = None) -> Dict[str, Any]:
         """One aggregated view for the console: proposals, negotiations, links, audit."""
@@ -1796,6 +2225,41 @@ class Database:
 def _proposal_record(row: Any) -> Dict[str, Any]:
     record = dict(row)
     record["payload"] = _json_load(record.get("payload"), {})
+    return record
+
+
+def _require_agent_id(value: Any, label: str) -> str:
+    text = str(value or "").strip()
+    if not _ID_RE.match(text):
+        raise LedgerError(f"{label} 不是合法 Bot id")
+    return text
+
+
+def _require_capability(value: Any) -> str:
+    text = str(value or "").strip()
+    if text == GRANT_WILDCARD:
+        return text
+    if not GRANT_CAPABILITY_RE.match(text):
+        raise LedgerError(f"能力名 {text!r} 非法：小写字母开头，允许 a-z0-9_.-，长度 3..64")
+    return text
+
+
+def _clamp_task_timeout(value: Any) -> float:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError) as exc:
+        raise LedgerError(f"超时必须是数字，收到 {value!r}") from exc
+    if not math.isfinite(seconds):
+        raise LedgerError("超时必须是有限数字")
+    return max(TASK_TIMEOUT_MIN_SECONDS, min(seconds, TASK_TIMEOUT_MAX_SECONDS))
+
+
+def _task_record(row: Any) -> Dict[str, Any]:
+    """行 → 对外记录。两个 JSON 列在这里解码，其余列原样带出。"""
+    record = dict(row)
+    record["args"] = _json_load(record.pop("args_json", ""), {})
+    raw = record.pop("result_json", "") or ""
+    record["result"] = _json_load(raw, {}) if raw else {}
     return record
 
 

@@ -1,10 +1,10 @@
 """``python3 -m app.main --self-test`` 的全量自检运行器。
 
-分组设计（24 组，按运行顺序；权威清单见文件末尾的 ``SELF_TEST_GROUPS``）：
+分组设计（26 组，按运行顺序；权威清单见文件末尾的 ``SELF_TEST_GROUPS``）：
 配置与权限、SQLite 账本、WebSocket 协议帧、进程监督、开通初始化、规则引擎、
 路由引擎、网关管线、插件总线、开发者 Open API、Web 后台、i18n 完整性、
-Web 实时链路、隐私邀请链接、冷备往返、生态卡片、.ics、安装脚本与交付物纪律、
-Mac 节点、A2A、访客门户、替身引擎与替身面板。
+Web 实时链路、隐私邀请链接、跨 Agent 编排、二维码诊断降级、冷备往返、生态卡片、
+.ics、安装脚本与交付物纪律、Mac 节点、A2A、访客门户、替身引擎与替身面板。
 
 自检只依赖 ``studio/tests/fake_popopx_cli.py``（一个同样讲真协议的本地替身），
 因此不需要真实的 ``popopx-cli``，也不会连接任何 SMP 服务器。
@@ -2775,7 +2775,7 @@ def group_i18n(test: SelfTest, h: Harness) -> None:
     t.eq("目录只有后台与官网两套", sorted(CATALOGS), ["admin", "site"])
     t.eq("后台目录覆盖 18 语种", sorted(CATALOGS["admin"]), sorted(LOCALES))
     t.eq("官网目录覆盖 18 语种", sorted(CATALOGS["site"]), sorted(LOCALES))
-    t.eq("后台英文基准词条数", len(en_admin), 99)
+    t.eq("后台英文基准词条数", len(en_admin), 130)
     t.eq("官网英文基准词条数", len(en_site), 21)
     for locale in LOCALES:
         t.eq(f"{locale} 后台无缺失词条", missing_keys(locale, "admin"), [])
@@ -4353,7 +4353,7 @@ def group_agent_ledger(test: SelfTest, h: Harness) -> None:
     t = test
     db = h.database("agent_ledger")
 
-    t.eq("账本 schema 版本推进到 5", SCHEMA_VERSION, 5)
+    t.eq("账本 schema 版本推进到 6", SCHEMA_VERSION, 6)
     tables = {row["name"] for row in db.conn.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table'")}
     t.eq("v5 的六张表全部建成", [x for x in AGENT_TABLES if x not in tables], [])
@@ -4363,9 +4363,9 @@ def group_agent_ledger(test: SelfTest, h: Harness) -> None:
         "OR name LIKE 'idx_negot%' OR name LIKE 'idx_cal%')")}
     t.check("v5 建了配套索引", len(indexes) >= 6, str(sorted(indexes)))
     t.eq("重跑迁移不再应用任何版本", db.migrate(target_version=SCHEMA_VERSION), [])
-    t.eq("迁移台账记到 5",
+    t.eq("迁移台账记到 6",
          [r["version"] for r in db.conn.execute(
-             "SELECT version FROM schema_migrations ORDER BY version")], [1, 2, 3, 4, 5])
+             "SELECT version FROM schema_migrations ORDER BY version")], [1, 2, 3, 4, 5, 6])
     again = {row["name"] for row in db.conn.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table'")}
     t.eq("重跑迁移不会把表建两遍", sorted(again & set(AGENT_TABLES)), sorted(AGENT_TABLES))
@@ -4675,7 +4675,7 @@ def group_agent_console(test: SelfTest, h: Harness) -> None:
     s = c.get(f"{api}/summary", headers=a).json()
     t.eq("摘要六段齐全", sorted(s), ["funnel", "guest", "node", "ok", "runtime", "stages"])
     t.eq("面板的阶段下拉与账本同源", s["stages"], list(AUDIT_STAGES))
-    t.eq("审计阶段共九段", len(AUDIT_STAGES), 9)
+    t.eq("审计阶段共十段", len(AUDIT_STAGES), 10)
     t.eq("漏斗两段", sorted(s["funnel"]), ["errors", "stages"])
     t.eq("运行时点明插件 id", s["runtime"]["plugin_id"], "personal_agent")
     t.eq("运行时七段", sorted(s["runtime"]),
@@ -5039,9 +5039,9 @@ def group_agent_console(test: SelfTest, h: Harness) -> None:
     audit = c.get(f"{api}/audit", headers=a, params={"bot_id": bid}).json()
     t.eq("审计三段", sorted(audit), ["audit", "funnel", "ok"])
     t.check("审计有内容", len(audit["audit"]) >= 6, str(len(audit["audit"])))
-    t.eq("审计行十三段", sorted(audit["audit"][0]),
-         ["bot_id", "chat_ref", "data", "detail", "event", "id", "latency_ms", "level", "link_id",
-          "negotiation_id", "proposal_id", "stage", "ts"])
+    t.eq("审计行十四段", sorted(audit["audit"][0]),
+         ["bot_id", "chat_ref", "correlation_id", "data", "detail", "event", "id", "latency_ms",
+          "level", "link_id", "negotiation_id", "proposal_id", "stage", "ts"])
     t.eq("审计阶段全部落在白名单内", sorted({row["stage"] for row in audit["audit"]} - set(AUDIT_STAGES)), [])
     t.eq("审计级别不越出账本白名单", sorted({row["level"] for row in audit["audit"]} - set(AUDIT_LEVELS)), [])
     t.check("节点缺路由的失败记为 error",
@@ -5297,6 +5297,926 @@ def group_agent_console(test: SelfTest, h: Harness) -> None:
     t.eq("面板键都在页面上被用到", [key for key in panel_keys if f'data-i18n="{key}"' not in page_html], [])
 
 
+def group_orchestration(test: SelfTest, h: Harness) -> None:
+    """跨 Agent 编排的真实行为：默认拒绝、超时熔断、回环/并发闸、扇出聚合、审计回放、打码。
+
+    这一组打在 :mod:`app.orchestrator` 上，执行体用注入的闭包 —— 编排器承诺的是"策略、
+    账本、聚合、审计"四件事，投影本身由 :mod:`app.orchestrator_local` 负责，末尾另用真实
+    装配的栈证明五个投影不是空壳。派发都是 async，因此一个场景一次 ``h.async_run``；
+    需要并发时序的地方（熔断、busy 闸、取消）在同一事件循环里用 ``asyncio`` 原语排布，
+    不靠 sleep 赌概率。
+    """
+    t = test
+    from .database import (
+        GRANT_WILDCARD,
+        MAX_TASK_CONCURRENCY,
+        MAX_TASK_HOPS,
+        TASK_RESULT_MAX_CHARS,
+        TASK_TIMEOUT_MAX_SECONDS,
+        TASK_TIMEOUT_MIN_SECONDS,
+    )
+    from .orchestrator import (
+        CAPABILITY_SPECS,
+        FANOUT_BUDGET_MAX_SECONDS,
+        FANOUT_MAX_DEFAULT,
+        Orchestrator,
+        OrchestratorError,
+        validate_args,
+    )
+
+    db = h.database("orchestration")
+    origin = str(db.create_bot("orchorigin", 5390)["id"])
+    beta = str(db.create_bot("orchbeta", 5391)["id"])
+    gamma = str(db.create_bot("orchgamma", 5392)["id"])
+    delta = str(db.create_bot("orchdelta", 5393)["id"])
+    o = Orchestrator(db)
+
+    # ------------------------------------------------------------------ 注册面
+    t.eq("新编排器零注册", o.registered(), [])
+    t.eq("注销未注册的能力返回 False", o.unregister("ledger.profile"), False)
+    try:
+        o.register("bot.ping", lambda ctx: {})
+        t.check("未声明的能力不能注册", False, "没抛 OrchestratorError")
+    except OrchestratorError as exc:
+        t.eq("未声明能力的错误码", exc.code, "unknown_capability")
+    try:
+        o.register("ledger.profile", lambda ctx: {}, writes=True)
+        t.check("索要写副作用被拒", False, "没抛")
+    except OrchestratorError as exc:
+        t.eq("写副作用错误码", exc.code, "bad_args")
+        t.contains("写副作用说明理由", exc.detail, "拒绝承载")
+    try:
+        o.register("ledger.profile", "not-callable")
+        t.check("执行体不可调用被拒", False, "没抛")
+    except OrchestratorError as exc:
+        t.eq("不可调用执行体的错误码", exc.code, "bad_args")
+
+    captured: Dict[str, Any] = {}
+
+    def project(ctx: Dict[str, Any]) -> Dict[str, Any]:
+        captured.clear()
+        captured.update(dict(ctx))
+        return {"ok": True, "counts": bool(ctx["args"].get("include_counts")), "target": ctx["bot_id"]}
+
+    def explode(ctx: Dict[str, Any]) -> Dict[str, Any]:
+        raise ValueError("连不上 smp1.popopx.test/a#k=SECRETLINE 且 api_key: sk-abcdefghij")
+
+    def shape_router(ctx: Dict[str, Any]) -> Any:
+        if "非映射" in str(ctx["args"].get("text") or ""):
+            return ["执行体返回了列表"]
+        return {"ok": True, "target": ctx["bot_id"]}
+
+    def bloated(ctx: Dict[str, Any]) -> Dict[str, Any]:
+        return {"blob": "x" * (TASK_RESULT_MAX_CHARS + 1)}
+
+    o.register("ledger.profile", project)
+    t.eq("注册后清单有序", o.registered(), ["ledger.profile"])
+    t.eq("注销已注册的能力返回 True", o.unregister("ledger.profile"), True)
+    o.register("ledger.profile", project)
+    o.register("reply.compose", explode)
+    o.register("router.plan", shape_router)
+    o.register("calendar.availability", bloated)
+
+    caps = o.capabilities()
+    t.eq("能力清单五项且与规格同源", sorted(r["capability"] for r in caps), sorted(CAPABILITY_SPECS))
+    t.eq("能力清单每行七段", sorted({k for r in caps for k in r}),
+         ["available", "capability", "optional", "reads", "required", "summary", "writes"])
+    t.eq("已注册的四项标为可用", sorted(r["capability"] for r in caps if r["available"]),
+         ["calendar.availability", "ledger.profile", "reply.compose", "router.plan"])
+    t.eq("未接投影的能力标为不可用",
+         [r["available"] for r in caps if r["capability"] == "workspace.summarize"], [False])
+    t.eq("五个能力都是只读", sorted({r["writes"] for r in caps}), [False])
+    t.eq("规格里没有能力声明写副作用", [n for n, s in CAPABILITY_SPECS.items() if s.get("writes")], [])
+
+    snap = o.snapshot()
+    t.eq("快照七段", sorted(snap),
+         ["capabilities", "grants", "inflight", "ledger", "limits", "stats", "tasks"])
+    t.eq("快照边界等于全局边界", snap["limits"],
+         {"max_hops": MAX_TASK_HOPS, "max_concurrent": MAX_TASK_CONCURRENCY,
+          "max_fanout": FANOUT_MAX_DEFAULT, "timeout_min_seconds": TASK_TIMEOUT_MIN_SECONDS,
+          "timeout_max_seconds": TASK_TIMEOUT_MAX_SECONDS})
+    t.eq("空账本的计数全零", sorted(k for k, v in snap["stats"].items() if v), [])
+    t.eq("无在途任务", snap["inflight"], [])
+    t.eq("默认扇出上限", FANOUT_MAX_DEFAULT, 8)
+
+    # ------------------------------------------------------------------ 入参闸
+    t.eq("布尔入参原样保留", validate_args("ledger.profile", {"include_counts": False}),
+         {"include_counts": False})
+    t.eq("字符串入参去空白", validate_args("reply.compose", {"text": "  你好  "}), {"text": "你好"})
+    for label, cap, args in (
+        ("未知键被拒", "ledger.profile", {"nope": 1}),
+        ("缺必填被拒", "reply.compose", {}),
+        ("空白必填被拒", "reply.compose", {"text": "   "}),
+        ("文本超长被拒", "reply.compose", {"text": "x" * 2001}),
+        ("越界整数被拒", "calendar.availability", {"days": 401}),
+        ("负数被拒", "calendar.availability", {"days": -1}),
+        ("不支持的类型被拒", "ledger.profile", {"include_counts": {"a": 1}}),
+    ):
+        try:
+            validate_args(cap, args)
+            t.check(label, False, "没抛 OrchestratorError")
+        except OrchestratorError as exc:
+            t.eq(label, exc.code, "bad_args")
+    try:
+        validate_args("bot.unknown", {})
+        t.check("未知能力无法校验入参", False, "没抛")
+    except OrchestratorError as exc:
+        t.eq("未知能力的错误码", exc.code, "unknown_capability")
+
+    def dispatch(*args: Any, **kw: Any) -> Dict[str, Any]:
+        return h.async_run(o.dispatch, *args, **kw)
+
+    # ------------------------------------------------------------------ 默认拒绝
+    t.eq("全新账本零授权", db.list_grants(), [])
+    refused = dispatch(origin, beta, "ledger.profile", {})
+    t.eq("无授权即拒绝", refused["status"], "refused")
+    t.eq("拒绝原因码", refused["error_code"], "no_grant")
+    t.eq("拒绝自带关联号", bool(refused["correlation_id"]), True)
+    t.eq("拒绝不落结果", refused["result"], {})
+    t.eq("拒绝行沿用缺省超时", refused["timeout_seconds"], TASK_TIMEOUT_MIN_SECONDS)
+    t.eq("拒绝计入统计", o.stats["refused"], 1)
+    t.eq("拒绝仍写进任务账本",
+         [(r["status"], r["error_code"]) for r in db.list_tasks(bot_id=origin)],
+         [("refused", "no_grant")])
+    early = str(refused["correlation_id"])
+    t.eq("拒绝写一条审计",
+         [(r["stage"], r["event"], r["level"]) for r in db.audit_replay(early)],
+         [("orchestrator", "refused", "warn")])
+    t.eq("审计记下发起方与关联号",
+         [(r["correlation_id"], r["bot_id"]) for r in db.audit_replay(early)], [(early, origin)])
+
+    want_code = {
+        "陌生发起方": "unknown_origin", "陌生目标": "unknown_target",
+        "自己派给自己": "self_dispatch", "未注册能力": "unknown_capability",
+        "非法入参": "bad_args",
+    }
+    for label, args in (
+        ("陌生发起方", ("bot_nope_0000", beta, "ledger.profile", {})),
+        ("陌生目标", (origin, "bot_nope_0001", "ledger.profile", {})),
+        ("自己派给自己", (origin, origin, "ledger.profile", {})),
+        ("未注册能力", (origin, beta, "workspace.summarize", {})),
+        ("非法入参", (origin, beta, "reply.compose", {"nope": 1})),
+    ):
+        try:
+            dispatch(*args)
+            t.check(label, False, "没抛 OrchestratorError")
+        except OrchestratorError as exc:
+            t.eq(label + "的错误码", exc.code, want_code[label])
+    t.eq("五条拒绝路径都没新增账本行", len(db.list_tasks()), 1)
+    t.eq("拒绝路径不计数为派发", o.stats["dispatched"], 0)
+
+    # ------------------------------------------------------------------ 放行与上下文
+    grant = db.grant_agent_task(origin, beta, "ledger.profile", max_hops=2, timeout_seconds=10.0)
+    t.eq("授权十列", sorted(grant),
+         ["capability", "created_at", "enabled", "id", "max_concurrent", "max_hops",
+          "origin_bot_id", "target_bot_id", "timeout_seconds", "updated_at"])
+    t.eq("同三元组幂等覆盖",
+         db.grant_agent_task(origin, beta, "ledger.profile", max_hops=2, timeout_seconds=10.0)["id"],
+         grant["id"])
+    t.eq("幂等覆盖不增授权行", len(db.list_grants()), 1)
+    t.eq("超时下限被夹住",
+         db.grant_agent_task(origin, beta, "reply.compose", timeout_seconds=0.01)["timeout_seconds"],
+         TASK_TIMEOUT_MIN_SECONDS)
+    t.eq("超时可按配置存住",
+         db.grant_agent_task(origin, delta, "ledger.profile", timeout_seconds=13.7)["timeout_seconds"],
+         13.7)
+    t.eq("并发上限被夹到全局",
+         db.grant_agent_task(origin, delta, "reply.compose", max_concurrent=9999)["max_concurrent"],
+         MAX_TASK_CONCURRENCY)
+    t.eq("跳数上限被夹到全局",
+         db.grant_agent_task(origin, beta, "router.plan", max_hops=99)["max_hops"], MAX_TASK_HOPS)
+    db.grant_agent_task(origin, beta, "router.plan", max_hops=99, timeout_seconds=10.0)
+
+    ok = dispatch(origin, beta, "ledger.profile", {"include_counts": True})
+    t.eq("授权后成功", ok["status"], "succeeded")
+    t.eq("结果就是执行体的返回", ok["result"], {"ok": True, "counts": True, "target": beta})
+    t.eq("执行体拿到八段上下文", sorted(captured),
+         ["args", "bot_id", "capability", "correlation_id", "deadline_seconds", "hops",
+          "origin_bot_id", "task_id"])
+    t.eq("上下文的 bot_id 是目标不是发起方", captured["bot_id"], beta)
+    t.eq("上下文的 origin_bot_id 是发起方", captured["origin_bot_id"], origin)
+    t.eq("上下文带的入参就是校验后的那一份", captured["args"], {"include_counts": True})
+    t.eq("超时预算随授权下发", captured["deadline_seconds"], 10.0)
+    t.eq("默认跳数是一跳", captured["hops"], 1)
+    t.eq("上下文的任务号就是账本行号", captured["task_id"], ok["id"])
+    t.eq("成功行清空错误位", (ok["error_code"], ok["detail"]), ("", ""))
+    t.eq("成功行有关闭时间", ok["finished_at"] >= ok["created_at"], True)
+    t.eq("成功行记录延迟", isinstance(ok["latency_ms"], float), True)
+    t.eq("结果原样落库", db.get_task(ok["id"])["result"], ok["result"])
+    t.eq("成功计入统计", o.stats["succeeded"], 1)
+    t.eq("落定后在途清空", o.snapshot()["inflight"], [])
+    thread = str(ok["correlation_id"])
+    t.eq("成功写审计两条且顺序正确",
+         [(r["event"], r["level"]) for r in db.audit_replay(thread)],
+         [("dispatch", "info"), ("succeeded", "info")])
+    t.eq("审计数据段带任务号/能力/跳数",
+         [(r["data"]["task_id"], r["data"]["capability"], r["data"]["hops"])
+          for r in db.audit_replay(thread)],
+         [(ok["id"], "ledger.profile", 1), (ok["id"], "ledger.profile", 1)])
+
+    # ------------------------------------------------------------------ 通配与禁用
+    db.set_grant_enabled(grant["id"], False)
+    t.eq("禁用行不再是生效授权", db.find_grant(origin, beta, "ledger.profile"), None)
+    t.eq("禁用行仍留在清单里", db.list_grants()[0]["enabled"], 0)
+    t.eq("禁用即拒", dispatch(origin, beta, "ledger.profile", {})["error_code"], "no_grant")
+    t.eq("只读清单能筛出生效项", sorted(g["id"] for g in db.list_grants(enabled_only=True)),
+         sorted(g["id"] for g in db.list_grants() if g["id"] != grant["id"]))
+    db.set_grant_enabled(grant["id"], True)
+    t.eq("重新启用即放行", dispatch(origin, beta, "ledger.profile", {})["status"], "succeeded")
+    t.eq("改不存在的授权返回 None", db.set_grant_enabled(999999, True), None)
+    wild = db.grant_agent_task(origin, gamma, GRANT_WILDCARD)
+    t.eq("通配授权覆盖已注册能力",
+         dispatch(origin, gamma, "ledger.profile", {})["status"], "succeeded")
+    exact = db.grant_agent_task(origin, gamma, "ledger.profile", timeout_seconds=7.5)
+    t.eq("精确授权优先于通配", db.find_grant(origin, gamma, "ledger.profile")["id"], exact["id"])
+    t.eq("删除授权", db.delete_grant(wild["id"]), True)
+    t.eq("删掉的通配不再命中", db.find_grant(origin, gamma, "router.plan"), None)
+    t.eq("删不存在的授权返回 False", db.delete_grant(999999), False)
+    t.raises("空发起方无法授权", Exception, db.grant_agent_task, "", beta, "ledger.profile")
+    t.raises("非法能力名无法授权", Exception, db.grant_agent_task, origin, beta, "BAD NAME")
+    t.raises("非法任务状态无法入库", Exception, db.create_task,
+             correlation_id="x", origin_bot_id=origin, target_bot_id=beta,
+             capability="ledger.profile", status="done")
+    t.raises("任务行不可改关联号", Exception, db.update_task, ok["id"], correlation_id="nope")
+
+    # ------------------------------------------------------------------ 超时熔断
+    db.grant_agent_task(origin, beta, "calendar.availability", timeout_seconds=TASK_TIMEOUT_MIN_SECONDS)
+
+    async def fuse_probe() -> Dict[str, Any]:
+        holder: Dict[str, Any] = {}
+
+        async def stalled(ctx: Dict[str, Any]) -> Dict[str, Any]:
+            holder["started"] = True
+            await asyncio.sleep(2.0)
+            return {"never": True}
+
+        o.register("calendar.availability", stalled)
+        task = asyncio.ensure_future(
+            o.dispatch(origin, beta, "calendar.availability", {}, correlation_id="fuse")
+        )
+        while not holder.get("started") and not task.done():
+            await asyncio.sleep(0.005)
+        mid = db.list_tasks(correlation_id="fuse")[0]["status"]
+        inflight = list(o.snapshot()["inflight"])
+        return {"mid": mid, "inflight": inflight, "outcome": await task}
+
+    fused = h.async_run(fuse_probe)
+    row = fused["outcome"]
+    t.eq("卡住的任务被熔断", row["status"], "timeout")
+    t.eq("熔断原因码", row["error_code"], "timeout")
+    t.eq("熔断写明预算", row["detail"], f"{TASK_TIMEOUT_MIN_SECONDS:.3f}s")
+    t.eq("熔断前确实处于 running", fused["mid"], "running")
+    t.eq("熔断期间任务挂在途表上", fused["inflight"], [row["id"]])
+    t.eq("熔断后在途清空", o.snapshot()["inflight"], [])
+    t.eq("熔断没有等满执行体", row["latency_ms"] < 1500.0, True)
+    t.eq("熔断计入统计", o.stats["timeout"], 1)
+    t.eq("熔断不落结果", row["result"], {})
+    t.eq("熔断写审计",
+         [(r["event"], r["level"]) for r in db.audit_replay("fuse") if r["event"] == "timeout"],
+         [("timeout", "warn")])
+    o.register("calendar.availability", bloated)
+
+    # ------------------------------------------------------------------ 执行体异常与打码
+    needles = ("SECRETLINE", "sk-abcdefghij", "smp1.popopx.test", "api_key")
+    boom = dispatch(origin, beta, "reply.compose", {"text": "触发异常"})
+    t.eq("执行体抛错归一成失败", boom["status"], "failed")
+    t.eq("执行体抛错原因码", boom["error_code"], "executor_error")
+    t.contains("异常摘要保留类型名", boom["detail"], "ValueError")
+    t.eq("异常摘要压成单行", "\n" in boom["detail"], False)
+    t.eq("异常摘要不超长", len(boom["detail"]) <= 180, True)
+    for needle in needles:
+        t.check(f"detail 不外泄 {needle}", needle not in boom["detail"], boom["detail"][:140])
+    t.check("整行 JSON 不外泄密钥形状",
+            all(n not in json.dumps(boom, ensure_ascii=False) for n in needles), str(boom)[:200])
+    audit_rows = db.audit_replay(str(boom["correlation_id"]))
+    t.check("审计行不外泄密钥形状",
+            all(n not in json.dumps(audit_rows, ensure_ascii=False) for n in needles),
+            str(audit_rows)[:200])
+    t.eq("失败计入统计", o.stats["failed"], 1)
+    t.eq("异常路径不落结果", boom["result"], {})
+
+    wrong = dispatch(origin, beta, "router.plan", {"text": "非映射"})
+    t.eq("返回非映射判失败", (wrong["status"], wrong["error_code"]), ("failed", "executor_error"))
+    t.contains("非映射写明类型", wrong["detail"], "list")
+    t.contains("非映射写明要求", wrong["detail"], "映射")
+    big = dispatch(origin, beta, "calendar.availability", {})
+    t.eq("超体积上限判失败而不是截断", (big["status"], big["error_code"]),
+         ("failed", "executor_error"))
+    t.contains("体积闸写出上限值", big["detail"], str(TASK_RESULT_MAX_CHARS))
+    t.eq("超体积的行不留半成品结果", big["result"], {})
+    t.eq("没有任何任务停在 running", db.list_tasks(status="running"), [])
+    t.eq("没有任何任务停在 queued", db.list_tasks(status="queued"), [])
+
+    # ------------------------------------------------------------------ 跳数 / 回环 / 并发
+    db.grant_agent_task(origin, beta, "router.plan", max_hops=1, timeout_seconds=10.0)
+    hop = dispatch(origin, beta, "router.plan", {"text": "两跳"}, hops=2)
+    t.eq("超跳数被拒", (hop["status"], hop["error_code"]), ("refused", "hop_budget"))
+    t.contains("跳数闸写明预算", hop["detail"], "hops 2 > 1")
+    parent = dispatch(origin, beta, "router.plan", {"text": "一跳"}, hops=1)
+    t.eq("跳数在预算内放行", parent["status"], "succeeded")
+    t.eq("授权跳数超过全局上限也拒",
+         dispatch(origin, beta, "ledger.profile", {}, hops=MAX_TASK_HOPS + 1)["error_code"],
+         "hop_budget")
+
+    db.grant_agent_task(beta, origin, "ledger.profile", timeout_seconds=10.0)
+    db.grant_agent_task(beta, delta, "ledger.profile", timeout_seconds=10.0)
+    loop = dispatch(beta, origin, "ledger.profile", {}, parent_id=parent["id"])
+    t.eq("A→B 之后再派回 A 判回环", (loop["status"], loop["error_code"]), ("refused", "cycle"))
+    t.contains("回环写明链长", loop["detail"], "祖先链")
+    outside = dispatch(beta, delta, "ledger.profile", {}, parent_id=parent["id"])
+    t.eq("链上没有的 Bot 不受回环闸影响", outside["status"], "succeeded")
+    t.eq("子任务沿用父任务关联号", outside["correlation_id"], parent["correlation_id"])
+    t.eq("调用方点名关联号时优先于继承",
+         dispatch(beta, delta, "ledger.profile", {}, parent_id=parent["id"],
+                  correlation_id="named-thread")["correlation_id"], "named-thread")
+    t.eq("父任务号入库", outside["parent_id"], parent["id"])
+    t.eq("陌生父号不会被误判成回环",
+         dispatch(beta, delta, "ledger.profile", {}, parent_id="task_nope_9999")["status"], "succeeded")
+
+    async def contend() -> list:
+        def sleeper(ctx: Dict[str, Any]) -> Any:
+            async def later() -> Dict[str, Any]:
+                await asyncio.sleep(0.25)
+                return {"slept": True}
+
+            return later()
+
+        o.register("workspace.summarize", sleeper)
+        db.grant_agent_task(origin, gamma, "workspace.summarize", max_concurrent=1,
+                            timeout_seconds=10.0)
+        return list(await asyncio.gather(
+            o.dispatch(origin, gamma, "workspace.summarize", {"text": "甲"}),
+            o.dispatch(origin, gamma, "workspace.summarize", {"text": "乙"}),
+        ))
+
+    raced = h.async_run(contend)
+    t.eq("并发预算只放一条", sorted(r["status"] for r in raced), ["refused", "succeeded"])
+    t.eq("超额那条是 busy", [r["error_code"] for r in raced if r["status"] == "refused"], ["busy"])
+    t.contains("busy 写明占用比", raced[1]["detail"], "1/1")
+    t.eq("并发闸不落悬挂行", db.list_tasks(status="running", capability="workspace.summarize"), [])
+    o.unregister("workspace.summarize")
+
+    # ------------------------------------------------------------------ 取消
+    t.raises("取消不存在的任务", OrchestratorError, o.cancel, "task_nope_0000")
+    t.raises("已落定的任务不可取消", OrchestratorError, o.cancel, ok["id"])
+    ghost = db.create_task(correlation_id="ghost", origin_bot_id=origin,
+                           target_bot_id=beta, capability="ledger.profile", status="running")
+    before = o.stats["cancelled"]
+    cut = o.cancel(ghost["id"])
+    t.eq("进程外的悬挂行直接收口", cut["status"], "cancelled")
+    t.eq("悬挂行写明来源", cut["detail"], "orphan")
+    t.eq("悬挂行有原因码", cut["error_code"], "cancelled")
+    t.eq("取消计数加一", o.stats["cancelled"], before + 1)
+    t.raises("重复取消已落定的行", OrchestratorError, o.cancel, ghost["id"])
+    t.eq("取消不改历史关联号", db.get_task(ghost["id"])["correlation_id"], "ghost")
+    t.eq("取消写审计一条",
+         [(r["event"], r["level"]) for r in db.audit_replay("ghost")], [("cancelled", "warn")])
+
+    async def live_cancel() -> Dict[str, Any]:
+        holder: Dict[str, Any] = {}
+
+        async def hang(ctx: Dict[str, Any]) -> Dict[str, Any]:
+            holder["id"] = ctx["task_id"]
+            await asyncio.sleep(3.0)
+            return {"never": True}
+
+        o.register("calendar.availability", hang)
+        task = asyncio.ensure_future(
+            o.dispatch(origin, beta, "calendar.availability", {}, correlation_id="live-cancel")
+        )
+        while "id" not in holder and not task.done():
+            await asyncio.sleep(0.005)
+        returned = o.cancel(holder["id"])
+        mid = db.get_task(holder["id"])["status"]
+        return {"mid": mid, "returned": returned["status"],
+                "settled": (await task)["status"], "id": holder["id"]}
+
+    live = h.async_run(live_cancel)
+    t.eq("在途任务由发起方收尾成 cancelled", live["settled"], "cancelled")
+    t.eq("取消行写明操作者", db.get_task(live["id"])["detail"], "operator")
+    t.eq("取消行有原因码", db.get_task(live["id"])["error_code"], "cancelled")
+    t.eq("取消瞬间账本仍是 running", live["mid"], "running")
+    t.eq("cancel() 返回时状态尚未改写", live["returned"], "running")
+    t.eq("取消后在途清空", o.snapshot()["inflight"], [])
+    t.eq("取消写审计",
+         [r["event"] for r in db.audit_replay("live-cancel") if r["event"] == "cancelled"],
+         ["cancelled"])
+    o.register("calendar.availability", bloated)
+
+    # ------------------------------------------------------------------ 扇出聚合
+    try:
+        h.async_run(o.fanout, origin, [], "ledger.profile", {})
+        t.check("空目标扇出被拒", False, "没抛")
+    except OrchestratorError as exc:
+        t.eq("空目标扇出的错误码", exc.code, "no_targets")
+    try:
+        crowd = [str(db.create_bot(f"orchcrowd{index}", 5400 + index)["id"])
+                 for index in range(FANOUT_MAX_DEFAULT + 1)]
+        h.async_run(o.fanout, origin, crowd, "ledger.profile", {})
+        t.check("超扇出上限被拒", False, "没抛")
+    except OrchestratorError as exc:
+        t.eq("超扇出上限的错误码", exc.code, "fanout_limit")
+        t.contains("上限写明个数与限额", exc.detail, f"{FANOUT_MAX_DEFAULT + 1} > {FANOUT_MAX_DEFAULT}")
+    try:
+        h.async_run(o.fanout, origin, [beta], "reply.compose", {"nope": 1})
+        t.check("扇出先校验入参再派发", False, "没抛")
+    except OrchestratorError as exc:
+        t.eq("扇出入参校验的错误码", exc.code, "bad_args")
+    t.eq("扇出预算上限", FANOUT_BUDGET_MAX_SECONDS, 900.0)
+
+    for target in (beta, gamma, delta):
+        db.grant_agent_task(origin, target, "router.plan", timeout_seconds=10.0)
+
+    async def mixed_fan() -> Dict[str, Any]:
+        def branch(ctx: Dict[str, Any]) -> Any:
+            if ctx["bot_id"] == gamma:
+                raise ValueError("这个 Bot 的投影炸了")
+            if ctx["bot_id"] == delta:
+                return None
+            return {"ok": True, "target": ctx["bot_id"]}
+
+        o.register("router.plan", branch)
+        return await o.fanout(origin, [beta, beta, gamma, delta], "router.plan",
+                              {"text": "扇"}, correlation_id="fan-thread")
+
+    fan = h.async_run(mixed_fan)
+    t.eq("扇出聚合九段", sorted(fan),
+         ["budget_seconds", "capability", "correlation_id", "counts", "origin_bot_id",
+          "partial", "succeeded", "targets", "total"])
+    t.eq("扇出去重并保持顺序", [r["target_bot_id"] for r in fan["targets"]], [beta, gamma, delta])
+    t.eq("扇出总数按去重后算", fan["total"], 3)
+    t.eq("扇出成功一条", fan["succeeded"], 1)
+    t.eq("部分成功不算整体失败", fan["partial"], True)
+    t.eq("扇出逐目标给状态", [r["status"] for r in fan["targets"]],
+         ["succeeded", "failed", "failed"])
+    t.eq("扇出逐目标给原因码", [r["error_code"] for r in fan["targets"]],
+         ["", "executor_error", "executor_error"])
+    t.eq("扇出计数与逐目标一致", fan["counts"], {"succeeded": 1, "failed": 2})
+    t.eq("扇出逐目标带任务号", [bool(r.get("task_id")) for r in fan["targets"]], [True, True, True])
+    t.eq("扇出预算取最紧超时加一秒", fan["budget_seconds"], 11.0)
+    t.eq("扇出预算不越全局上限", fan["budget_seconds"] <= FANOUT_BUDGET_MAX_SECONDS, True)
+    t.eq("扇出沿用调用方的关联号", fan["correlation_id"], "fan-thread")
+    t.eq("扇出的每个目标都挂同一关联号",
+         sorted({r["correlation_id"] for r in db.list_tasks(correlation_id="fan-thread")}),
+         ["fan-thread"])
+    t.eq("扇出审计首尾两段",
+         [r["event"] for r in db.audit_replay("fan-thread")
+          if r["event"] in ("fanout", "aggregated")],
+         ["fanout", "aggregated"])
+    t.eq("有成功时聚合审计是 info",
+         [r["level"] for r in db.audit_replay("fan-thread") if r["event"] == "aggregated"], ["info"])
+    t.eq("扇出计数入统计", o.stats["fanout"], 1)
+
+    async def all_bad() -> Dict[str, Any]:
+        def always_raise(ctx: Dict[str, Any]) -> Dict[str, Any]:
+            raise KeyError("gone")
+
+        o.register("reply.compose", always_raise)
+        return await o.fanout(origin, [beta, gamma], "reply.compose", {"text": "全坏"},
+                              correlation_id="fan-none")
+
+    none = h.async_run(all_bad)
+    t.eq("全失败时成功数为零", none["succeeded"], 0)
+    t.eq("全失败时不算部分成功", none["partial"], False)
+    t.eq("全失败的聚合审计转 warn",
+         [r["level"] for r in db.audit_replay("fan-none") if r["event"] == "aggregated"], ["warn"])
+    t.eq("短键名异常不被误打码", none["targets"][0]["detail"], "KeyError: 'gone'")
+
+    # ------------------------------------------------------------------ 回放
+    for label, cid in (("空关联号", ""), ("陌生关联号", "no-such-thread")):
+        try:
+            o.replay(cid)
+            t.check(label + "的回放被拒", False, "没抛")
+        except OrchestratorError as exc:
+            t.eq(label + "回放的错误码", exc.code, "bad_args" if not cid else "not_found")
+
+    rep = o.replay("fan-thread")
+    t.eq("回放八段", sorted(rep),
+         ["audit", "capabilities", "correlation_id", "events", "span_ms", "statuses", "tasks", "tree"])
+    t.eq("回放只含该线程的任务",
+         sorted({r["correlation_id"] for r in rep["tasks"]}), ["fan-thread"])
+    t.eq("回放任务数等于扇出目标数", len(rep["tasks"]), 3)
+    t.eq("回放事件数等于审计长度", rep["events"], len(rep["audit"]))
+    t.eq("回放按能力计数", rep["capabilities"], {"router.plan": 3})
+    t.eq("回放按状态计数", rep["statuses"], {"succeeded": 1, "failed": 2})
+    t.eq("回放审计按时间正序",
+         [r["ts"] for r in rep["audit"]], sorted(r["ts"] for r in rep["audit"]))
+    t.eq("回放每行审计都带关联号",
+         sorted({r["correlation_id"] for r in rep["audit"]}), ["fan-thread"])
+    t.eq("回放跨度非负", rep["span_ms"] >= 0.0, True)
+    t.eq("扇出无父子因此森林三棵", len(rep["tree"]), 3)
+    t.eq("树节点七段", sorted(rep["tree"][0]),
+         ["capability", "children", "error_code", "origin_bot_id", "status", "target_bot_id", "task_id"])
+    chain = o.replay(str(parent["correlation_id"]))
+    t.eq("父子链收成一棵树", len(chain["tree"]), 1)
+    t.eq("父节点挂两个子节点", len(chain["tree"][0]["children"]), 2)
+    t.eq("树根就是父任务", chain["tree"][0]["task_id"], parent["id"])
+    t.eq("回放按 limit 截断", len(o.replay(str(parent["correlation_id"]), limit=2)["tasks"]), 2)
+
+    # ------------------------------------------------------------------ 账本聚合
+    agg = db.task_stats()
+    t.eq("账本统计四段", sorted(agg), ["active_grants", "by_capability", "by_status", "total"])
+    t.eq("账本总数与逐状态一致", agg["total"], sum(agg["by_status"].values()))
+    t.eq("账本按能力聚合三段", sorted(agg["by_capability"][0]),
+         ["avg_latency_ms", "capability", "total"])
+    t.eq("生效授权数被统计出来", agg["active_grants"],
+         len([g for g in db.list_grants() if g["enabled"]]))
+    t.eq("按 Bot 过滤后总数不放大", db.task_stats(beta)["total"] <= agg["total"], True)
+    t.eq("按目标筛任务不越界",
+         all(r["target_bot_id"] == beta or r["origin_bot_id"] == beta
+             for r in db.list_tasks(bot_id=beta)), True)
+    t.eq("审计阶段名第十段是编排器", AUDIT_STAGES[-1], "orchestrator")
+    t.eq("编排器用的阶段名在册", AUDIT_STAGES.index("orchestrator"), 9)
+
+    # ------------------------------------------------------------------ 不是桩
+    # ------------------------------------------------------------------ 不是桩：真实装配的五个投影
+    from datetime import datetime as _dt, timezone as _tzutc
+    from .mac_node_bridge import CACHE_SOURCE
+
+    real = h.stack(tag="orch-real")
+    ro = real.orchestrator
+    t.eq("装配后的栈自带编排器", type(ro).__name__, "Orchestrator")
+    t.eq("五投影全部注册", sorted(ro.registered()), sorted(CAPABILITY_SPECS))
+    t.eq("装配后的清单没有不可用项",
+         [r["capability"] for r in ro.capabilities() if not r["available"]], [])
+    rb = str(real.db.create_bot("orchreal", 5394, display_name="投影 Bot")["id"])
+    peer = str(real.db.create_bot("orchpeer", 5395, display_name="对端")["id"])
+    denied = h.async_run(ro.dispatch, rb, peer, "ledger.profile", {})
+    t.eq("真装配默认拒绝", (denied["status"], denied["error_code"]), ("refused", "no_grant"))
+    try:
+        h.async_run(ro.dispatch, "bot_nope_7777", peer, "ledger.profile", {})
+        t.check("陌生发起方仍然先被挡下", False, "没抛")
+    except OrchestratorError as exc:
+        t.eq("陌生发起方仍然先被挡下", exc.code, "unknown_origin")
+    real.db.grant_agent_task(rb, peer, GRANT_WILDCARD, timeout_seconds=10.0)
+    prof = h.async_run(ro.dispatch, rb, peer, "ledger.profile", {})
+    t.eq("真投影读到目标 Bot 自己的名字", prof["result"].get("name"), "orchpeer")
+    t.eq("真投影给十一段画像", sorted(prof["result"]),
+         ["active_tasks", "bot_id", "default_locale", "display_name", "messages_in",
+          "messages_out", "name", "reply_rules", "routing_rules", "status", "timezone"])
+    t.eq("画像里没有令牌或地址列",
+         sorted(k for k in prof["result"]
+                if any(s in k for s in ("token", "smp", "invite", "link", "secret", "port"))), [])
+    t.check("画像整份不含该 Bot 的令牌",
+            str(real.db.get_bot(peer).get("bot_token") or "#") not in json.dumps(prof["result"]),
+            sorted(prof["result"]))
+    t.eq("画像的 bot_id 是目标", prof["result"]["bot_id"], peer)
+    t.eq("画像的显示名是目标的", prof["result"]["display_name"], "对端")
+    counts_off = h.async_run(ro.dispatch, rb, peer, "ledger.profile", {"include_counts": False})
+    t.eq("关掉计数后只剩六段", sorted(counts_off["result"]),
+         ["bot_id", "default_locale", "display_name", "name", "status", "timezone"])
+
+    reply = h.async_run(ro.dispatch, rb, peer, "reply.compose", {"text": "在吗"})
+    t.eq("回复投影只回结论不回正文", sorted(reply["result"]),
+         ["has_reply", "matched", "reply_chars", "rule_id", "status", "suppressed_by"])
+    t.eq("空表时回复投影是无匹配", reply["result"]["status"], "no_match")
+    t.eq("无匹配时不谎报命中", reply["result"]["matched"], False)
+    t.eq("无匹配时没有规则号", reply["result"]["rule_id"], None)
+    t.eq("无匹配时没有正文", reply["result"]["reply_chars"], 0)
+    rule = real.db.upsert_reply_rule(peer, trigger_type="regex", pattern="营业",
+                                     reply_text="正常营业")
+    hit = h.async_run(ro.dispatch, rb, peer, "reply.compose", {"text": "还营业吗"})
+    t.eq("规则按 Bot 隔离缓存：绕过路由直接写库时仍读到旧视图",
+         hit["result"]["status"], "no_match")
+    real.rules.invalidate_cache()  # 路由保存规则后做的就是这件事（main.py:739/747）
+    hit = h.async_run(ro.dispatch, rb, peer, "reply.compose", {"text": "还营业吗"})
+    t.eq("接上真规则表后命中", hit["result"]["matched"], True)
+    t.eq("命中状态取自引擎", hit["result"]["status"], "ok")
+    t.eq("命中给出规则号", hit["result"]["rule_id"], rule["id"])
+    t.eq("命中只给正文字符数", hit["result"]["reply_chars"], len("正常营业"))
+    t.eq("命中不回正文", "reply" in hit["result"], False)
+    t.eq("可渲染标记为真", hit["result"].get("renders"), True)
+    t.eq("画像里的规则计数随真表走",
+         h.async_run(ro.dispatch, rb, peer, "ledger.profile", {})["result"]["reply_rules"], 1)
+
+    cool_before = dict(real.router._cooldowns)
+    tickets_before = len(real.db.list_proposals(peer))
+    route = h.async_run(ro.dispatch, rb, peer, "router.plan", {"text": "帮我订明天"})
+    t.eq("路由投影六段", sorted(route["result"]),
+         ["by_target_type", "forwarded", "matched_rules", "plan_count", "status",
+          "would_open_ticket"])
+    t.eq("空表时路由投影不转发", route["result"]["forwarded"], False)
+    t.eq("干跑不开工单", route["result"]["would_open_ticket"], False)
+    t.eq("干跑零命中", route["result"]["plan_count"], 0)
+    h.async_run(ro.dispatch, rb, peer, "router.plan", {"text": "帮我订明天"})
+    t.eq("干跑不动真实转发冷却表", dict(real.router._cooldowns), cool_before)
+    t.eq("干跑不新增工单", len(real.db.list_proposals(peer)), tickets_before)
+
+    avail = h.async_run(ro.dispatch, rb, peer, "calendar.availability", {"days": 3})
+    t.eq("忙闲投影五段", sorted(avail["result"]),
+         ["bot_id", "days", "from", "slot_seconds", "span"])
+    t.eq("忙闲投影按天数铺开", len(avail["result"]["days"]), 3)
+    t.eq("忙闲投影的颗粒是半小时", avail["result"]["slot_seconds"], 1800)
+    t.eq("忙闲投影的跨度等于天数", avail["result"]["span"], 3)
+    t.eq("无缓存时每日只报未缓存",
+         sorted({k for day in avail["result"]["days"] for k in day}), ["cached", "day"])
+    t.eq("无缓存时 cached 为假", sorted({d["cached"] for d in avail["result"]["days"]}), [False])
+    t.eq("忙闲投影上限十四天",
+         len(h.async_run(ro.dispatch, rb, peer, "calendar.availability",
+                         {"days": 99})["result"]["days"]), 14)
+    real.db.cache_busy(
+        peer, "2026-11-27",
+        [{"start": _dt(2026, 11, 27, 9, 0, tzinfo=_tzutc.utc).timestamp(),
+          "end": _dt(2026, 11, 27, 11, 0, tzinfo=_tzutc.utc).timestamp(),
+          "busy": True, "title": "与主人的周会", "summary": "绝不该出现在投影里"}],
+        timezone="UTC", source=CACHE_SOURCE, ttl_seconds=600.0,
+    )
+    masked = h.async_run(ro.dispatch, rb, peer, "calendar.availability",
+                         {"days": 1, "day": "2026-11-27", "timezone": "UTC"})
+    day0 = masked["result"]["days"][0]
+    t.eq("命中缓存时投影八段", sorted(day0),
+         ["busy_slots", "cached", "day", "free_slots", "intervals", "mask", "offset_minutes",
+          "timezone"])
+    t.eq("缓存命中即报 cached", day0["cached"], True)
+    t.eq("缓存日期原样回显", day0["day"], "2026-11-27")
+    t.eq("投影只折出区间条数", day0["intervals"], 1)
+    t.eq("两小时折成四个半小时槽", day0["busy_slots"], 4)
+    t.eq("忙槽与空槽互补", day0["free_slots"], 48 - day0["busy_slots"])
+    t.eq("掩码给出被占的槽位号", [c["t"] for c in day0["mask"]], [18, 19, 20, 21])
+    t.eq("掩码槽只带时间与忙标记", sorted({k for c in day0["mask"] for k in c}), ["busy", "t"])
+    t.eq("时区名回显真正用于折算的那个", day0["timezone"], "UTC")
+    t.eq("UTC 偏移是零", day0["offset_minutes"], 0)
+    t.eq("日程正文键不进投影",
+         sorted(k for k in day0 if any(s in k for s in ("title", "summary", "event"))), [])
+    t.check("日程标题整份不外泄", "绝不该出现在投影里" not in json.dumps(masked, ensure_ascii=False),
+            str(day0)[:160])
+
+    summ = h.async_run(ro.dispatch, rb, peer, "workspace.summarize", {"text": "明天下午三点找我"})
+    t.eq("抽取投影七段", sorted(summ["result"]),
+         ["calls", "degraded", "engine", "error", "intent", "latency_ms", "tool"])
+    t.check("抽取投影说明用了哪个引擎", bool(summ["result"].get("engine")), str(summ["result"])[:120])
+    t.eq("抽取投影的延迟是数字", isinstance(summ["result"].get("latency_ms"), float), True)
+    t.eq("抽取投影的 calls 是列表", isinstance(summ["result"].get("calls"), list), True)
+    t.eq("抽取投影的降级位是布尔", isinstance(summ["result"].get("degraded"), bool), True)
+
+    for label, cap, args in (("未知键", "ledger.profile", {"unexpected": 1}),
+                             ("缺必填", "workspace.summarize", {})):
+        try:
+            h.async_run(ro.dispatch, rb, peer, cap, args)
+            t.check(f"真投影仍校验{label}", False, "没抛")
+        except OrchestratorError as exc:
+            t.eq(f"真投影仍校验{label}", exc.code, "bad_args")
+    deny = h.async_run(ro.dispatch, rb, peer, "ledger.profile", {}, hops=9)
+    t.eq("真投影同样受跳数闸约束", deny["error_code"], "hop_budget")
+    replay_real = ro.replay(str(prof["correlation_id"]))
+    t.eq("真投影的回放按关联号取", replay_real["correlation_id"], str(prof["correlation_id"]))
+    t.eq("真投影的审计只落在编排器阶段",
+         sorted({r["stage"] for r in replay_real["audit"]}), ["orchestrator"])
+    t.eq("真投影的审计事件正序", [r["event"] for r in replay_real["audit"]][:2],
+         ["dispatch", "succeeded"])
+    t.eq("快照列出的可用投影",
+         sorted(r["capability"] for r in ro.snapshot()["capabilities"] if r["available"]),
+         sorted(CAPABILITY_SPECS))
+    real.db.delete_bot(peer, hard=True)
+    try:
+        h.async_run(ro.dispatch, rb, peer, "ledger.profile", {})
+        t.check("目标被删后编排立刻拒绝", False, "没抛")
+    except OrchestratorError as exc:
+        t.eq("目标被删后的错误码", exc.code, "unknown_target")
+    db.close()
+
+
+def group_qrcode_diag(test: SelfTest, h: Harness) -> None:
+    """``/qrcode`` 的失败契约与控制台降级：404 与 409 分家，取不到图也要开抽屉讲清原因。
+
+    抽屉的意义是"降级可见"：封装失败时界面既不能空白，也不能伪造地址，更不能把原始
+    ``popopx:/`` 地址当成邀请链接展示 —— 所以这里既打 HTTP，也直接从 ``static/index.html``
+    断言装配顺序（先清残留 → 请求 → 失败分支照常开对话框）。
+    """
+    t = test
+    from .bot_supervisor import QR_MAX_BYTES
+    from .security.opaque_invite_codec import (
+        LINK_PREFIX,
+        MAX_ADDRESS_BYTES,
+        OpaqueInviteError,
+        URI_SCHEMES,
+        decode_invite_link,
+        encode_invite_link,
+    )
+
+    stack = h.stack(tag="qrcode-diag")
+    c, _ = h.client(stack)
+    a = h.auth()
+    api = f"{API_PREFIX}/bots"
+
+    # ------------------------------------------------------------------ 鉴权
+    t.eq("未鉴权取封装数据被拒", c.get(f"{api}/x/qrcode").status_code, 401)
+    t.eq("未鉴权取二维码图被拒", c.get(f"{api}/x/qr.png").status_code, 401)
+    t.eq("401 走鉴权守卫的封套", sorted(c.get(f"{api}/x/qrcode").json()["detail"]),
+         ["description", "error_code", "ok"])
+
+    # ------------------------------------------------------------------ 404 与 409 分家
+    absent = c.get(f"{api}/bot_absent_0000/qrcode", headers=a)
+    t.eq("陌生 Bot 是 404 而不是 409", absent.status_code, 404)
+    t.eq("404 的封套三段", sorted(absent.json()), ["description", "error_code", "ok"])
+    t.contains("404 说明是 Bot 不存在", absent.json()["description"], "不存在")
+    t.eq("404 的 error_code 与状态同号", absent.json()["error_code"], 404)
+    t.eq("404 不夹带数据体",
+         sorted(k for k in absent.json() if k != "ok"), ["description", "error_code"])
+    t.eq("二维码图同样先判存在", c.get(f"{api}/bot_absent_0000/qr.png", headers=a).status_code, 404)
+
+    fresh = str(stack.db.create_bot("qrnolink", 5420)["id"])
+    t.eq("新建 Bot 还没有永久地址", stack.db.get_bot(fresh)["permanent_link"], "")
+    no_link = c.get(f"{api}/{fresh}/qrcode", headers=a)
+    t.eq("没有地址才是 409 冲突", no_link.status_code, 409)
+    t.contains("409 说明缺的是永久联系地址", no_link.json()["description"], "永久联系地址")
+    t.contains("409 顺带给出下一步", no_link.json()["description"], "启动")
+    t.ne("409 与 404 的说明文字不同", no_link.json()["description"], absent.json()["description"])
+    t.eq("图接口在没有地址时也拦下", c.get(f"{api}/{fresh}/qr.png", headers=a).status_code, 409)
+    t.contains("图接口的 409 也说没有地址",
+               c.get(f"{api}/{fresh}/qr.png", headers=a).json()["description"], "永久联系地址")
+
+    # ------------------------------------------------------------------ 成功契约
+    stack.db.update_bot(fresh, permanent_link="popopx:/fakepermanentlink")
+    good = c.get(f"{api}/{fresh}/qrcode", headers=a)
+    t.eq("有地址后 200", good.status_code, 200)
+    data = good.json()
+    t.eq("二维码响应八段", sorted(data),
+         ["bot_id", "bytes", "data_url", "link", "ok", "opaque", "raw_link", "sha256"])
+    t.eq("成功响应带 ok 位", data["ok"], True)
+    t.eq("点名的是这位 Bot", data["bot_id"], fresh)
+    t.eq("封装标记为真", data["opaque"], True)
+    t.eq("link 走隐私前缀", data["link"].startswith(LINK_PREFIX), True)
+    t.eq("raw_link 原样回显", data["raw_link"], "popopx:/fakepermanentlink")
+    t.eq("邀请链接可解回原始地址", decode_invite_link(data["link"]), "popopx:/fakepermanentlink")
+    t.eq("原始地址不出现在邀请链接里", "fakepermanentlink" in data["link"], False)
+    t.eq("PNG 字节数为正", data["bytes"] > 0, True)
+    t.eq("sha256 是 64 位小写十六进制",
+         [len(data["sha256"]), all(ch in "0123456789abcdef" for ch in data["sha256"])], [64, True])
+    t.eq("sha256 就是这段 PNG 的摘要",
+         hashlib.sha256(base64.b64decode(data["data_url"].split(",", 1)[1])).hexdigest(),
+         data["sha256"])
+    t.eq("内联图是 data:image/png", data["data_url"].startswith("data:image/png;base64,"), True)
+    t.eq("内联图与 bytes 同源",
+         len(base64.b64decode(data["data_url"].split(",", 1)[1])), data["bytes"])
+    t.eq("save=False 时响应里没有文件路径", "file" in data, False)
+    t.eq("路由不往磁盘落二维码", (stack.settings.data_dir / "qr").exists(), False)
+
+    again = c.get(f"{api}/{fresh}/qrcode", headers=a).json()
+    t.eq("每次调用换 nonce", again["link"] != data["link"], True)
+    t.eq("换 nonce 不换语义", decode_invite_link(again["link"]), "popopx:/fakepermanentlink")
+    t.eq("原始地址保持稳定", again["raw_link"], data["raw_link"])
+    t.eq("两次密文互不相同（不可关联性）",
+         data["link"].rsplit("/", 1)[-1] != again["link"].rsplit("/", 1)[-1], True)
+    t.check("邀请链接远小于 2048 字节",
+            len(data["link"].encode("utf-8")) < MAX_ADDRESS_BYTES, str(len(data["link"])))
+
+    # ------------------------------------------------------------------ 封装失败也是 409
+    smp = str(stack.db.create_bot("qrsmp", 5421)["id"])
+    stack.db.update_bot(smp, permanent_link="smp://abcdefghij@smp1.popopx.test/a#k=xyz")
+    refused = c.get(f"{api}/{smp}/qrcode", headers=a)
+    t.eq("不在允许清单里的 scheme 走 409", refused.status_code, 409)
+    t.contains("409 写明是隐私封装失败", refused.json()["description"], "封装失败")
+    t.contains("409 带上编解码器的原因", refused.json()["description"], "开头")
+    t.eq("失败响应不外泄节点片段",
+         sorted(n for n in ("abcdefghij", "smp1.popopx.test") if n in json.dumps(refused.json())), [])
+    t.eq("图接口对同一位 Bot 也 409", c.get(f"{api}/{smp}/qr.png", headers=a).status_code, 409)
+    t.eq("scheme 允许清单与服务套件对齐", URI_SCHEMES, ("popopx:/", "popopx://", "https://"))
+    t.eq("字节上限与服务套件对齐", MAX_ADDRESS_BYTES, 2048)
+
+    # 编解码器收 2048 字节（与服务套件对齐），但二维码画不下那么长：QR v40 + EC-Q
+    # 的字节容量实测 1663 字符，对应 1200 字节的 ``popopx:/`` 地址。这条带里的地址
+    # "能封装、画不出图"，接口必须给 409 讲清楚，而不是让 qrcode 抛 500。
+    qr_edge = "popopx:/" + "b" * 1192      # 1200 字节地址 -> 正好 1663 字符链接
+    qr_over = "popopx:/" + "b" * 1193      # 1201 字节地址 -> 1664 字符，画不下
+    t.eq("容量内地址的链接正好等于二维码上限",
+         len(encode_invite_link(qr_edge).encode()), QR_MAX_BYTES)
+    t.eq("超一格地址的链接正好超一个字符",
+         len(encode_invite_link(qr_over).encode()), QR_MAX_BYTES + 1)
+    t.eq("二维码容量等于 QR v40 字节模式上限", QR_MAX_BYTES, 1663)
+    t.eq("容量小于编解码器上限（v1 契约不变）", QR_MAX_BYTES < MAX_ADDRESS_BYTES, True)
+    edge = str(stack.db.create_bot("qredge", 5422)["id"])
+    stack.db.update_bot(edge, permanent_link=qr_edge)
+    edge_ok = c.get(f"{api}/{edge}/qrcode", headers=a)
+    t.eq("刚好在容量内可出图", edge_ok.status_code, 200)
+    t.eq("边界那位能原样解回", decode_invite_link(edge_ok.json()["link"]), qr_edge)
+    huge = str(stack.db.create_bot("qrhuge", 5423)["id"])
+    stack.db.update_bot(huge, permanent_link=qr_over)
+    over = c.get(f"{api}/{huge}/qrcode", headers=a)
+    t.eq("超出一格就是 409 而不是 500", over.status_code, 409)
+    t.contains("409 写明是二维码容量不足", over.json()["description"], "二维码容量不足")
+    t.contains("409 给出实测容量数字", over.json()["description"], str(QR_MAX_BYTES))
+    t.contains("409 指了替代动作", over.json()["description"], "邀请链接文本")
+    png_over = c.get(f"{api}/{huge}/qr.png", headers=a)
+    t.eq("超容量的图接口也降级 409", png_over.status_code, 409)
+    t.contains("图接口同样写明容量", png_over.json()["description"], "二维码容量不足")
+    at_cap = encode_invite_link("popopx:/" + "c" * (MAX_ADDRESS_BYTES - 8))
+    t.eq("编解码器仍接受 2048 字节明文（v1 契约）",
+         decode_invite_link(at_cap), "popopx:/" + "c" * (MAX_ADDRESS_BYTES - 8))
+    t.raises("编解码器在 2049 字节判超长", OpaqueInviteError,
+             encode_invite_link, "popopx:/" + "c" * (MAX_ADDRESS_BYTES - 7))
+    https_bot = str(stack.db.create_bot("qrhttps", 5424)["id"])
+    stack.db.update_bot(https_bot, permanent_link="https://popopx.chat/bot/x")
+    https_ok = c.get(f"{api}/{https_bot}/qrcode", headers=a)
+    t.eq("https 联系地址可封装", https_ok.status_code, 200)
+    t.eq("https 地址可解回", decode_invite_link(https_ok.json()["link"]), "https://popopx.chat/bot/x")
+    fall = str(stack.db.create_bot("qrfall", 5425)["id"])
+    stack.db.update_bot(fall, contact_address="popopx:/contactonly")
+    fall_ok = c.get(f"{api}/{fall}/qrcode", headers=a)
+    t.eq("没有永久地址时退回联系地址", fall_ok.status_code, 200)
+    t.eq("退回值原样回显", fall_ok.json()["raw_link"], "popopx:/contactonly")
+    t.eq("退回值也能解回", decode_invite_link(fall_ok.json()["link"]), "popopx:/contactonly")
+
+    # ------------------------------------------------------------------ qr.png 与颗粒度夹住
+    def png_body(**params: Any) -> bytes:
+        query = {"raw": "1"}
+        query.update(params)
+        return c.get(f"{api}/{fresh}/qr.png", headers=a, params=query).content
+
+    plain = png_body()
+    t.eq("原始地址视图是 PNG 魔数", plain[:8], b"\x89PNG\r\n\x1a\n")
+    t.eq("原始地址视图渲染的就是裸地址（同默认颗粒）",
+         plain, stack.supervisor.qr_png("popopx:/fakepermanentlink", box_size=8))
+    head = c.get(f"{api}/{fresh}/qr.png", headers=a, params={"raw": "1"})
+    t.eq("图声明为 PNG", head.headers["content-type"], "image/png")
+    t.eq("图不缓存", head.headers["cache-control"], "no-store")
+    t.eq("隐私视图比裸地址视图更大", len(png_body(raw="0")) > len(plain), True)
+    t.eq("raw 的几种真值写法同源", png_body(raw="true"), png_body(raw="yes"))
+    t.eq("未传 box 时用路由默认颗粒", png_body(), png_body(box="8"))
+    t.eq("坏颗粒度不再 500",
+         c.get(f"{api}/{fresh}/qr.png", headers=a, params={"raw": "1", "box": "abc"}).status_code, 200)
+    t.eq("坏颗粒度回落到默认颗粒", png_body(box="abc"), png_body(box="8"))
+    t.eq("超大颗粒被夹到 32 而不是撑爆端口", png_body(box="100000"), png_body(box="32"))
+    t.eq("负颗粒被夹到 1", png_body(box="-5"), png_body(box="1"))
+    t.eq("零颗粒也被夹到 1", png_body(box="0"), png_body(box="1"))
+    t.eq("夹住后仍然是一张合法 PNG", png_body(box="100000")[:8], b"\x89PNG\r\n\x1a\n")
+    t.eq("颗粒可选", png_body(box="4") != png_body(box="8"), True)
+    t.eq("图接口不写盘", (stack.settings.data_dir / "qr").exists(), False)
+    saved = stack.supervisor.bot_qr(fresh, save=True)
+    qr_file = Path(saved["file"])
+    t.eq("显式 save 才给出文件路径", str(qr_file.parent), str(stack.settings.data_dir / "qr"))
+    t.eq("落盘文件存在", qr_file.is_file(), True)
+    t.eq("落盘字节与响应字节一致", qr_file.stat().st_size, saved["bytes"])
+    t.eq("落盘图的摘要与响应一致",
+         hashlib.sha256(qr_file.read_bytes()).hexdigest(), saved["sha256"])
+    t.eq("二维码目录收紧到 0700",
+         stat.S_IMODE((stack.settings.data_dir / "qr").stat().st_mode), 0o700)
+    t.eq("二维码文件收紧到 0600", stat.S_IMODE(qr_file.stat().st_mode), 0o600)
+    t.eq("落盘的图能解回原始地址", decode_invite_link(saved["link"]), "popopx:/fakepermanentlink")
+
+    # ------------------------------------------------------------------ 控制台降级装配
+    page = STATIC_PAGE.read_text(encoding="utf-8")
+    seg = page[page.index("function qrFill"):page.index("/* =============================================================== 3 rules")]
+    diag = seg[seg.index("function qrDiag"):seg.index("function showQr")]
+    show = seg[seg.index("function showQr"):]
+    t.contains("失败分支按 409 判", show, "e && e.status === 409")
+    t.contains("409 分支调用诊断降级", show, "qrDiag(e.message)")
+    t.contains("409 分支仍打开对话框", show, 'openDlg(get("d-qr"))')
+    t.contains("409 分支把焦点交给取消键", show, 'get("q-cancel").focus()')
+    t.check("409 分支先降级再返回，不走通用守卫",
+            show.index("qrDiag(e.message)") < show.index("guard()(e)") and "return; }" in show,
+            show[show.index(".catch"):][:180])
+    t.contains("其余状态码仍走统一守卫", show, "guard()(e)")
+    t.contains("降级说明带上失败原因", diag, 't("bots_qr_diag") + " · " + message')
+    t.contains("没有原因时也有一句说明", diag, 'note.textContent = message ?')
+    t.contains("降级说明被显式点亮", diag, "note.hidden = false")
+    t.contains("降级说明标成警示色", diag, 'note.classList.add("bad")')
+    t.contains("抽屉在失败时照常展开", diag, 'get("q-drawer").open = true')
+    t.contains("失败时不留旧图", diag, 'get("q-img").removeAttribute("src")')
+    t.contains("失败时图被隐藏", diag, 'get("q-img").hidden = true')
+    t.eq("降级只清空、不伪造任何链接",
+         [ln.strip() for ln in diag.splitlines() if "S.qrLink" in ln or "S.rawLink" in ln],
+         ['S.qrLink = ""; S.rawLink = "";'])
+    for forged in ("Math.random", "Date.now", "popopx:/"):
+        t.check(f"降级路径不伪造地址（{forged}）", forged not in diag, forged)
+    t.check("showQr 先清残留再发请求",
+            show.index('S.qrLink = ""') < show.index("api(API"), show[:40])
+    t.contains("清残留同时收起抽屉", show, "drawer.open = false")
+    t.contains("清残留同时隐藏说明", show, "note.hidden = true")
+    t.contains("清残留同时撤掉警示色", show, 'note.classList.remove("bad")')
+    t.contains("成功路径才填图", show, "qrFill(d)")
+    t.contains("图链接按 Bot 编码", show, "encodeURIComponent(id)")
+    start = page.index('<dialog id="d-qr"')
+    dlg = page[start:page.index("</dialog>", start)]
+    t.eq("成功与失败共用同一个对话框", page.count('<dialog id="d-qr"'), 1)
+    t.contains("对话框有诊断说明位", dlg, 'id="q-note"')
+    t.contains("说明位默认隐藏", dlg, 'id="q-note" hidden')
+    t.contains("说明位绑好文案键", dlg, 'data-i18n="bots_qr_diag"')
+    t.contains("对话框有原始地址抽屉", dlg, 'id="q-drawer"')
+    t.contains("抽屉标题写明是高级诊断", dlg, 'data-i18n="bots_raw_link"')
+    t.contains("抽屉里有永久地址一行", dlg, 'id="q-raw"')
+    t.contains("抽屉里有复制原始地址的按钮", dlg, 'id="q-raw-copy"')
+    tag = dlg[dlg.index("<details"):dlg.index(">", dlg.index("<details")) + 1]
+    t.eq("抽屉是默认收起的 details", "open" in tag, False)
+    t.eq("抽屉标签即 q-drawer", tag, '<details class="cfg sect" id="q-drawer">')
+    t.contains("复制原始地址时带警示", page, "copyOrWarn(S.rawLink)")
+    t.contains("api() 把状态码挂到错误上", page, "err.status = res.status")
+    t.contains("二维码按钮走 showQr", page, "showQr(b.id)")
+    t.eq("降级说明键已在 admin 目录里", "bots_qr_diag" in CATALOGS["admin"]["en"], True)
+
+    # ------------------------------------------------------------------ 门户口径
+    site = SITE_PAGE.read_text(encoding="utf-8")
+    for field in ("raw_link", "opaque", "data_url", "sha256"):
+        t.contains(f"门户二维码说明提到 {field}", site, field)
+    # 裸域（无路径）深链没有 A 记录、也解不出邀请：只允许带 /i/v1/ 这类完整路径的写法。
+    t.eq("门户没有无路径裸域",
+         re.findall(r'https?://(?:popopx\.im|popopx\.chat)(?![/:a-zA-Z0-9_-])', site), [])
+    t.eq("门户没有只有斜杠的裸域",
+         re.findall(r'https?://(?:popopx\.im|popopx\.chat)/(?![a-zA-Z0-9_])', site), [])
+    t.contains("门户示例用的就是邀请前缀", site, LINK_PREFIX)
+    stack.db.close()
+
+
 def group_invite_codec(test: SelfTest, h: Harness) -> None:
     """隐私邀请链接：跨语言向量、随机 nonce、明文不泄漏与篡改拒绝。"""
     t = test
@@ -5310,7 +6230,14 @@ def group_invite_codec(test: SelfTest, h: Harness) -> None:
     t.eq("格式版本为 1", INVITE_FORMAT_VERSION, 1)
     t.eq("nonce 12 字节", INVITE_NONCE_BYTES, 12)
     t.eq("tag 16 字节", INVITE_TAG_BYTES, 16)
-    t.eq("token 上限 5500 字符", INVITE_MAX_TOKEN_CHARS, 5500)
+    t.eq("明文上限对齐 service-suite MAX_URI_BYTES", INVITE_MAX_ADDRESS_BYTES, 2048)
+    # 2768 是按服务端算式（12+2048+16 → 无填充 base64url）单独手算的见证值，
+    # 不是从本仓常量推出来的，否则改错生成式这条断言会跟着一起错。
+    t.eq("token 上限 2768 字符", INVITE_MAX_TOKEN_CHARS, 2768)
+    t.eq("token 上限等于服务端 MAX_LINK_CHARS 去掉前缀",
+         INVITE_MAX_TOKEN_CHARS, 4 * ((12 + 2048 + 16 + 2) // 3))
+    t.raises("刚好超过 2048 的地址被拒", OpaqueInviteError, encode_invite_link,
+             "https://" + "a" * (2048 - len("https://") + 1))
     t.eq("URI 协议白名单与 service-suite 一致", INVITE_URI_SCHEMES,
          ("popopx:/", "popopx://", "https://"))
 
@@ -5491,6 +6418,8 @@ SELF_TEST_GROUPS: Dict[str, Callable[[SelfTest, Harness], None]] = {
     "i18n": group_i18n,
     "web_live": group_web_live,
     "invite_codec": group_invite_codec,
+    "orchestration": group_orchestration,
+    "qrcode_diag": group_qrcode_diag,
     "bundle": group_bundle,
     "eco_cards": group_eco_cards,
     "ics": group_ics,

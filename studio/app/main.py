@@ -32,6 +32,7 @@ from fastapi.responses import JSONResponse, Response
 from .bot_supervisor import (
     BotSupervisor,
     BotSupervisorError,
+    QRCapacityError,
     build_cli_argv,
     effective_smp_servers,
     render_wrapper_script,
@@ -56,6 +57,8 @@ from .i18n import (
     welcome_template,
 )
 from .open_api import router as open_api_router
+from .orchestrator import Orchestrator
+from .orchestrator_local import attach_local_capabilities
 from .plugin_manager import PluginError, PluginManager
 from .router_engine import RouterEngine
 from .rule_engine import InboundMessage, RuleEngine
@@ -190,6 +193,7 @@ class StudioStack:
     services: CoreServices
     booted: Dict[str, Any] = field(default_factory=dict)
     agent: Optional[AgentRuntime] = None
+    orchestrator: Optional[Orchestrator] = None
 
     async def start(self, *, spawn: bool = True) -> Dict[str, Any]:
         await self.plugins.load_async()
@@ -267,7 +271,10 @@ def build_stack(
     plugins.services = services
     supervisor.on_event = gateway.handle_event
     agent = AgentRuntime(db=ledger, settings=conf, sender=build_sender(services))
-    return StudioStack(conf, ledger, supervisor, rules, router, plugins, gateway, services, agent=agent)
+    stack = StudioStack(conf, ledger, supervisor, rules, router, plugins, gateway, services,
+                        agent=agent)
+    stack.orchestrator = attach_local_capabilities(Orchestrator(ledger), stack=stack)
+    return stack
 
 
 class _LateServices:
@@ -626,6 +633,10 @@ def _register_routes(app: FastAPI) -> None:
     @app.get(f"{API_PREFIX}/bots/{{bot_id}}/qrcode")
     async def bot_qrcode(bot_id: str, request: Request, _=Depends(require_admin)) -> Any:
         stack = stack_of(request)
+        # 与 /qr.png 同一条判据：Bot 不存在是 404，存在但还没地址才是 409，
+        # 控制台据此决定抽屉里写"没有地址"还是写"取不到"。
+        if stack.db.get_bot(bot_id) is None:
+            return fail(404, f"Bot {bot_id} 不存在")
         try:
             return ok(stack.supervisor.bot_qr(bot_id, save=False))
         except BotSupervisorError as exc:
@@ -647,7 +658,16 @@ def _register_routes(app: FastAPI) -> None:
             except OpaqueInviteError as exc:
                 return fail(409, f"邀请链接隐私封装失败：{exc}")
         try:
-            png = stack.supervisor.qr_png(link, box_size=int(request.query_params.get("box", "8")))
+            # ``box`` 来自查询串：非数字不是 500 的理由，超大值更不该让调用方一句话
+            # 就把管理端口拖去渲一张吃满内存的图。1–32 覆盖控制台的 4 与 8。
+            box = int(request.query_params.get("box", "8"))
+        except (TypeError, ValueError):
+            box = 8
+        try:
+            png = stack.supervisor.qr_png(link, box_size=max(1, min(box, 32)))
+        except QRCapacityError as exc:
+            # 地址有效、只是画不出图：409 让控制台走降级抽屉，500 只会把原因埋进日志。
+            return fail(409, f"二维码容量不足：{exc}")
         except (ValueError, OSError) as exc:
             return fail(500, f"二维码生成失败：{exc}")
         return Response(png, media_type="image/png", headers={"Cache-Control": "no-store"})

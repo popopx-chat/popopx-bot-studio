@@ -20,8 +20,8 @@ account and no e-mail address.
 - Zero model downloads: `needle3.cact` (33.7 MiB, under 50 MB) ships inside the repository, is
   SHA-256 verified before loading, and is usable the moment the service starts. Without a C
   runtime or SDK the runtime falls back to the deterministic extractor in this repo (section 5).
-- Self-test gate: `python3 -m app.main --self-test` → **24 groups / 7317 real assertions /
-  0 failures / ~18.6 s / exit code 0**. It only needs `studio/tests/fake_popopx_cli.py`
+- Self-test gate: `python3 -m app.main --self-test` → **26 groups / 7710 real assertions /
+  0 failures / ~20.5 s / exit code 0**. It only needs `studio/tests/fake_popopx_cli.py`
   (a local stand-in that speaks the same wire protocol and keeps profiles in `bot_chat.db`,
   so it survives a restart like the real CLI) — no network, no SMP server.
 
@@ -38,12 +38,16 @@ browser console / developer clients
 │ POPOPX Bot Studio (Python 3.11 + FastAPI, single process)          │
 │  main.py           routing, auth, lifecycle                                      │
 │  config.py         .env / environment, permission checks (0700·0600)             │
-│  database.py       SQLite (WAL) ledger + schema_migrations (currently v5)        │
+│  database.py       SQLite (WAL) ledger + schema_migrations (currently v6)        │
 │  bot_supervisor.py per-Bot isolated data dir, loopback port, wrapper, backoff    │
 │  ws_protocol.py    line-protocol frames, /_address /_create /_send commands      │
 │  gateway.py        inbound event → rules/router/plugins → outbound send          │
 │  rule_engine.py    auto-reply (exact / prefix / regex / default)                 │
 │  router_engine.py  keyword routing and ticket hand-off                           │
+│  orchestrator.py   cross-agent task dispatch: local grants, hop/concurrency/     │
+│                    timeout breakers, fan-out aggregation, audit replay           │
+│  orchestrator_local.py  five read-only capability projections, isolated per      │
+│                    target Bot                                                    │
 │  plugin_manager.py plugin bus: discovery, lifecycle, isolated dispatch, masking  │
 │  open_api.py       Telegram-style developer API                                   │
 │  i18n.py           18 locales, negotiation, welcome templates, parity asserts     │
@@ -205,6 +209,13 @@ the IKM/salt/info/AAD parameters match `popopx-service-suite`'s
 codec accepts the same URI-scheme allowlist of `popopx:/`, `popopx://` and `https://`, with
 the legacy `smp://` vector kept only as a rejected case); only the collapsed diagnostics block
 in the QR dialog and `qr.png?raw=1` reveal the raw `smp://` address.
+Failures are separated: an unknown Bot is 404, a Bot without a permanent address is 409, and a
+link rejected by the scheme allowlist or the byte cap is 409 as well — the console therefore
+still opens the dialog when no image comes back and writes the reason into the raw-diagnostics
+drawer instead of showing a blank panel. One measured boundary matters: the codec accepts 2048
+bytes of plaintext (aligned with the service suite) while a QR code at version 40 with error
+correction Q holds only 1663 bytes, so links in that band "seal but cannot be drawn" — the API
+answers 409 with a capacity message, never a 500.
 
 Stand-in admin API, prefix `/api/agent` (same `require_admin` guard): `summary`,
 `engine` (GET state / POST switch), `extract` (try a sentence), `prefs/{bot_id}` (GET/POST)
@@ -212,6 +223,11 @@ and `prefs/{bot_id}/reset`, `peers` (GET/POST) and `peers/remove`, `proposals` a
 `proposals/{id}/decision`, `negotiations` and `negotiate`, `audit`, `guest/links` (GET/POST),
 `guest/links/{id}/revoke`, `guest/links/{id}/url` (returns the full link once, nonce-guarded
 against replay), `node` (GET) and `node/probe` (POST).
+
+Cross-agent orchestration shares the `/api/agent` prefix (same `require_admin` guard):
+`orch` (policy and task snapshot), `orch/grants` (GET/POST), `orch/grants/{id}/toggle`,
+`orch/grants/{id}/delete`, `orch/dispatch`, `orch/fanout`, `orch/tasks`, `orch/tasks/{id}`,
+`orch/tasks/{id}/cancel` and `orch/replay?correlation_id=`.
 
 Guest channel (no admin token — the token *is* the credential): `GET /book`,
 `GET /book/<token>`, `POST /book/<token>` (submit a time preference) and
@@ -326,7 +342,30 @@ name, e-mail or full schedule. The page is self-contained HTML: no session, no c
 `<script>`, no external reference, visitor input HTML-escaped, the form posts to `action=""`, and
 all 18 locales ship with identical placeholders.
 
-### 5.6 New configuration keys
+### 5.6 Channel C: in-process multi-agent task orchestration
+
+One Bot's capabilities can be lent to another under an explicit policy, but only inside the
+Studio process and only through the five read-only projections in `orchestrator_local.py`
+(`reply.compose`, `router.plan`, `calendar.availability`, `workspace.summarize`,
+`ledger.profile`) — no extra listening port, no direct SMP connection, no other Bot's ledger rows.
+
+* **Default deny**: a dispatch needs an `(origin, target, capability)` row in
+  `agent_task_grants`, otherwise it is refused with `no_grant`. `target` accepts a `*` wildcard,
+  but the wildcard still has to be created explicitly and can be disabled or deleted at any time.
+* **Budgets**: 3 hops (the `parent_id` ancestry walk refuses cycles), 32 concurrent tasks,
+  a 0.5–300 s per-task timeout enforced by `asyncio.wait_for`, and fan-out targets deduplicated
+  to at most 8, run under `shield(gather(...))` so one failure never discards the other results.
+* **Audit and replay**: every dispatch writes a row into `agent_tasks` with the
+  `queued/running/succeeded/failed/timeout/refused/cancelled` state, a `correlation_id`, elapsed
+  time, a result summary and the refusal reason. Children inherit the parent's correlation id, so
+  `orch/replay` rebuilds the whole tree and the console's orchestration panel draws it. Hard
+  deleting a Bot retires its grants and tasks, and the projections immediately report
+  `unknown_target`.
+* **Scrubbing**: anything reaching `agent_tasks.detail` or the audit text passes shape-based
+  redaction first (`sk-…`, `Bearer …`, `key: …`, URLs, multi-label hostnames), including executor
+  exception text, so node hostnames never leak into logs.
+
+### 5.7 New configuration keys
 
 | Key | Default | Purpose |
 | --- | --- | --- |
@@ -420,7 +459,7 @@ cd studio
 | Group | Assertions | Coverage |
 | --- | --- | --- |
 | `config` | 62 | environment parsing, loopback constraint, permission warnings, illegal Mac Node/reasoner endpoints |
-| `database` | 110 | ledger CRUD, migrations v1..v5, soft delete, plugin config, proposal/negotiation/guest tables |
+| `database` | 110 | ledger CRUD, migrations v1..v6, soft delete, plugin config, proposal/negotiation/guest tables |
 | `agent_ledger` | 139 | proposal and negotiation state persistence, audit writes, availability cache, idempotency |
 | `ws_protocol` | 103 | line-protocol frames, command grammar, probe commands and error-frame wake-ups, errors and timeouts |
 | `supervisor` | 86 | port allocation, isolated dirs, wrapper and first-launch profile name, reconnect backoff |
@@ -433,7 +472,9 @@ cd studio
 | `web_admin` | 146 | console routes, CSRF/cookie, authorisation and audit |
 | `i18n` | 320 | 18-locale completeness, negotiation, welcome text, page injection |
 | `web_live` | 60 | real ASGI lifecycle, WebSocket, cold-backup round trip, privacy QR |
-| `invite_codec` | 118 | HKDF/ChaCha20 standard vectors, service-suite key and two standard vectors matched byte-for-byte, the `URI_SCHEMES` allowlist (the legacy `smp://` vector is rejected on both decode and encode), `/i/v1/` path-host checks, random nonce, no plaintext leak, tamper rejection |
+| `invite_codec` | 121 | HKDF/ChaCha20 standard vectors, service-suite key and two standard vectors matched byte-for-byte, the `URI_SCHEMES` allowlist (the legacy `smp://` vector is rejected on both decode and encode), `/i/v1/` path-host checks, random nonce, no plaintext leak, tamper rejection |
+| `orchestration` | 260 | in-process cross-agent dispatch gates (default-deny, hop budget, cycle guard, concurrency), timeout circuit-breaker, exception scrubbing, result aggregation and partial success, cancellation, replay and task tree, `task_stats`, plus the five projections (profile/reply.compose/router/calendar mask/workspace.summarize) exercised on a real assembled stack rather than stubs |
+| `qrcode_diag` | 129 | `/qrcode` and `/qr.png` envelope separation for 404/409/401, the 2048-byte codec cap against the 1663-byte QR capacity boundary, per-call nonce, `contact_address` fallback, `box` clamping, 0700/0600 on-disk modes, and the console drawer's assembly order (clear stale state -> request -> 409 still opens the drawer) |
 | `bundle` | 281 | export/verify/tamper/cross-ledger migration/idempotency, CLI `invite` and `--raw-links` |
 | `eco_cards` | 89 | `::POPOPX_ECO::` card and `::CB::` receipt codec, rejection of out-of-contract fields |
 | `ics` | 65 | RFC 5545 escaping, UTC instants, UID/DUMPSTAMP, durations and day-spanning events |
@@ -442,8 +483,8 @@ cd studio
 | `a2a` | 220 | masked projection, the `FORBIDDEN_KEYS` gate, HMAC signing and replay, timezone intersection, state machine |
 | `guest_portal` | 571 | token issue/verify/expiry/revocation/visit budget, concurrent claims, masked availability, the .ics gate, page escaping |
 | `agent_engine` | 3552 | Needle 3 extraction and the deterministic fallback, the weight SHA-256 gate, preference rules, copy and reasoner degradation, secret hygiene |
-| `agent_console` | 389 | `/api/agent/*` and `/book/*` routes, auth, panel data shapes, 18-locale strings |
-| total | **7317** | 24/24 groups, 0 failures, exit code 0 |
+| `agent_console` | 390 | `/api/agent/*` and `/book/*` routes, auth, panel data shapes, 18-locale strings |
+| total | **7710** | 26/26 groups, 0 failures, exit code 0 |
 
 ## 10. Operations and security notes
 

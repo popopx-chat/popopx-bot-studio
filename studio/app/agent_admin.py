@@ -28,6 +28,7 @@ from .database import AUDIT_STAGES, LedgerError
 from .guest_portal import CSP_POLICY, LINK_PATH_PREFIX, GuestError, token_mask
 from .i18n import LOCALES, normalize_locale
 from .mac_node_bridge import MacNodeError
+from .orchestrator import MAX_TASK_CONCURRENCY, MAX_TASK_HOPS, OrchestratorError
 
 ADMIN_PREFIX = "/api/agent"
 NONCE_CHARS = 24
@@ -685,6 +686,168 @@ def add_admin_routes(app: FastAPI) -> None:
         except (OSError, ValueError) as exc:
             return fail(502, f"节点不可达：{type(exc).__name__}")
         return ok({"health": health, "snapshot": snapshot, "node": runtime.node.status()})
+
+
+    # ------------------------------------------------------------- 跨 Agent 编排
+    def orchestrator_of(request: Request) -> Any:
+        orch = getattr(stack_of(request), "orchestrator", None)
+        if orch is None:
+            raise HTTPException(
+                status_code=503,
+                detail={"ok": False, "error_code": 503, "description": "编排器未装配"},
+            )
+        return orch
+
+    def orch_fail(exc: OrchestratorError) -> Any:
+        """把稳定的原因码翻成 HTTP 语义；被策略**拒绝**是 200 + refused 行，不是错误。"""
+        code = exc.code
+        status = 404 if code in ("unknown_origin", "unknown_target", "not_found") else (
+            409 if code == "not_cancellable" else 400
+        )
+        return fail(status, f"{code}: {exc.detail}" if exc.detail else code)
+
+    @app.get(f"{ADMIN_PREFIX}/orch")
+    async def orch_snapshot(
+        request: Request, bot_id: str = "", _=Depends(require_admin)
+    ) -> Any:
+        """一屏数据：可派能力、生效授权、近期任务与计数。"""
+        clean = _clean(bot_id, 64)
+        if clean:
+            need_bot(request, clean)
+        return ok(orchestrator_of(request).snapshot(clean or None))
+
+    @app.get(f"{ADMIN_PREFIX}/orch/grants")
+    async def orch_grants(
+        request: Request, bot_id: str = "", target_bot_id: str = "",
+        enabled_only: bool = False, _=Depends(require_admin)
+    ) -> Any:
+        rows = orchestrator_of(request).db.list_grants(
+            origin_bot_id=_clean(bot_id, 64) or None,
+            target_bot_id=_clean(target_bot_id, 64) or None,
+            enabled_only=bool(enabled_only),
+        )
+        return ok({"grants": rows, "total": len(rows)})
+
+    @app.post(f"{ADMIN_PREFIX}/orch/grants")
+    async def orch_grant_add(request: Request, _=Depends(require_admin)) -> Any:
+        """写一条授权。默认拒绝的反面：没有这一步，任何跨 Agent 派活都会被拒。"""
+        body = await body_of(request)
+        orch = orchestrator_of(request)
+        origin = need_bot(request, _clean(body.get("origin_bot_id") or body.get("bot_id"), 64))
+        target = need_bot(request, _clean(body.get("target_bot_id"), 64))
+        capability = _clean(body.get("capability"), 64)
+        if not capability:
+            return fail(400, "capability 必填")
+        try:
+            row = orch.db.grant_agent_task(
+                origin,
+                target,
+                capability,
+                max_hops=_int(body.get("max_hops"), 1, low=1, high=MAX_TASK_HOPS),
+                max_concurrent=_int(body.get("max_concurrent"), 4, low=1, high=MAX_TASK_CONCURRENCY),
+                timeout_seconds=_float(body.get("timeout_seconds"), 20.0),
+                enabled=str(body.get("enabled", "true")).lower() not in ("0", "false", "no"),
+            )
+        except LedgerError as exc:
+            return fail(400, f"授权写入失败：{exc}")
+        return ok({"grant": row})
+
+    @app.post(ADMIN_PREFIX + "/orch/grants/{grant_id}/toggle")
+    async def orch_grant_toggle(
+        request: Request, grant_id: int, enabled: str = "false", _=Depends(require_admin)
+    ) -> Any:
+        row = orchestrator_of(request).db.set_grant_enabled(
+            int(grant_id), str(enabled).lower() not in ("0", "false", "no")
+        )
+        if row is None:
+            return fail(404, f"授权 {grant_id} 不存在")
+        return ok({"grant": row})
+
+    @app.post(ADMIN_PREFIX + "/orch/grants/{grant_id}/delete")
+    async def orch_grant_delete(request: Request, grant_id: int, _=Depends(require_admin)) -> Any:
+        """删除授权。任务与审计行**保留**：撤回的是权限，不是历史。"""
+        return ok({"deleted": orchestrator_of(request).db.delete_grant(int(grant_id))})
+
+    @app.post(f"{ADMIN_PREFIX}/orch/dispatch")
+    async def orch_dispatch(request: Request, _=Depends(require_admin)) -> Any:
+        """真实派发一次：走完整策略闸、超时熔断与落库，不是模拟。"""
+        body = await body_of(request)
+        orch = orchestrator_of(request)
+        try:
+            task = await orch.dispatch(
+                _clean(body.get("origin_bot_id") or body.get("bot_id"), 64),
+                _clean(body.get("target_bot_id"), 64),
+                _clean(body.get("capability"), 64),
+                body.get("args") if isinstance(body.get("args"), Mapping) else {},
+                correlation_id=_clean(body.get("correlation_id"), 64),
+                parent_id=_clean(body.get("parent_id"), 64),
+                hops=_int(body.get("hops"), 1, low=1, high=MAX_TASK_HOPS),
+            )
+        except OrchestratorError as exc:
+            return orch_fail(exc)
+        return ok({"task": task})
+
+    @app.post(f"{ADMIN_PREFIX}/orch/fanout")
+    async def orch_fanout(request: Request, _=Depends(require_admin)) -> Any:
+        body = await body_of(request)
+        orch = orchestrator_of(request)
+        raw = body.get("targets")
+        targets = list(raw) if isinstance(raw, (list, tuple)) else [
+            item for item in _clean(raw, 4096).replace(";", ",").split(",") if item.strip()
+        ]
+        try:
+            aggregate = await orch.fanout(
+                _clean(body.get("origin_bot_id") or body.get("bot_id"), 64),
+                targets,
+                _clean(body.get("capability"), 64),
+                body.get("args") if isinstance(body.get("args"), Mapping) else {},
+                correlation_id=_clean(body.get("correlation_id"), 64),
+                budget_seconds=_float(body.get("budget_seconds"), 0.0),
+            )
+        except OrchestratorError as exc:
+            return orch_fail(exc)
+        return ok({"fanout": aggregate})
+
+    @app.get(f"{ADMIN_PREFIX}/orch/tasks")
+    async def orch_tasks(
+        request: Request, bot_id: str = "", status: str = "", capability: str = "",
+        correlation_id: str = "", limit: int = 50, _=Depends(require_admin)
+    ) -> Any:
+        rows = orchestrator_of(request).db.list_tasks(
+            bot_id=_clean(bot_id, 64) or None,
+            status=_clean(status, 16) or None,
+            capability=_clean(capability, 64) or None,
+            correlation_id=_clean(correlation_id, 64) or None,
+            limit=_int(limit, 50, low=1, high=500),
+        )
+        return ok({"tasks": rows, "total": len(rows)})
+
+    @app.get(ADMIN_PREFIX + "/orch/tasks/{task_id}")
+    async def orch_task(request: Request, task_id: str, _=Depends(require_admin)) -> Any:
+        orch = orchestrator_of(request)
+        row = orch.db.get_task(_clean(task_id, 64))
+        if row is None:
+            return fail(404, f"任务 {task_id} 不存在")
+        return ok({"task": row, "children": orch.db.task_children(row["id"])})
+
+    @app.post(ADMIN_PREFIX + "/orch/tasks/{task_id}/cancel")
+    async def orch_task_cancel(request: Request, task_id: str, _=Depends(require_admin)) -> Any:
+        try:
+            return ok({"task": orchestrator_of(request).cancel(_clean(task_id, 64))})
+        except OrchestratorError as exc:
+            return orch_fail(exc)
+
+    @app.get(f"{ADMIN_PREFIX}/orch/replay")
+    async def orch_replay(
+        request: Request, correlation_id: str, limit: int = 200, _=Depends(require_admin)
+    ) -> Any:
+        """按关联号回放整条链：任务树 + 时间正序的审计序列。"""
+        try:
+            return ok(orchestrator_of(request).replay(
+                _clean(correlation_id, 64), limit=_int(limit, 200, low=1, high=500)
+            ))
+        except OrchestratorError as exc:
+            return orch_fail(exc)
 
 
 __all__ = [

@@ -53,8 +53,12 @@ MASTER_KEY = bytes.fromhex("d1abbcb09b5bf244d9d8b6b1dcc38835b5a419d8a1d62b014c1b
 HKDF_SALT = b"popopx.chat/invite-link/v1/salt"
 HKDF_INFO = b"popopx.chat/invite-link/v1/key"
 
-MAX_ADDRESS_BYTES = 4096
-# 12B nonce + 4096B 明文 + 16B tag 的 base64url 上界（含取整余量）。
+#: 明文上限，与 popopx-service-suite/gateway/app/opaque_invite_codec.py @ a6c1632 的
+#: ``MAX_URI_BYTES`` 同值。放宽这一格就是改 v1 线格式：已发出的链接会因两端上限不一致而
+#: 在另一侧被判超长，所以它只能和服务端一起改，不能单独改。
+MAX_ADDRESS_BYTES = 2048
+# 12B nonce + 2048B 明文 + 16B tag 的 base64url 上界，等于服务端的
+# ``MAX_LINK_CHARS - len(LINK_PREFIX)``。
 MAX_TOKEN_CHARS = ((NONCE_BYTES + MAX_ADDRESS_BYTES + TAG_BYTES + 2) // 3) * 4
 
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]+$")

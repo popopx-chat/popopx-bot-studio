@@ -79,7 +79,11 @@ SCRYPT_P = 1
 
 QR_BOX_SIZE = 16
 QR_BORDER = 4
-QR_MIN_PIXELS = 900
+# 二维码 version 40 + 纠错等级 Q 的字节模式物理容量（实测：1663 字符可出图，
+# 1664 起 qrcode 抛 ``Invalid version (was 41)``）。邀请链接的 2048 字节明文上限
+# 与服务套件逐字节对齐、不能单独放宽，但那条上限之内仍留有一段"能封装、画不出图"
+# 的地址，所以出图前先按容量判一次，让控制台拿到 409 加一句能读的说明，而不是 500。
+QR_MAX_BYTES = 1663
 
 _SAFE_MEMBER_RE = re.compile(r"^[A-Za-z0-9._/-]{1,160}$")
 _CHAT_REF_RE = re.compile(r"^([@#])([1-9][0-9]{0,18})$")
@@ -89,6 +93,10 @@ EventHook = Callable[[str, Any], Awaitable[None]]
 
 class BotSupervisorError(RuntimeError):
     """生命周期操作无法完成（缺二进制、端口耗尽、进程未就绪等）。"""
+
+
+class QRCapacityError(ValueError):
+    """文本超出二维码物理容量：链接本身有效，只是画不出图。"""
 
 
 # ---------------------------------------------------------------------------
@@ -912,6 +920,9 @@ class BotSupervisor:
         import qrcode
         from qrcode.constants import ERROR_CORRECT_Q
 
+        size = len((text or "").encode("utf-8"))
+        if size > QR_MAX_BYTES:
+            raise QRCapacityError(f"待编码文本 {size} 字节，超出二维码容量 {QR_MAX_BYTES} 字节")
         qr = qrcode.QRCode(version=None, error_correction=ERROR_CORRECT_Q, box_size=box_size, border=QR_BORDER)
         qr.add_data(text)
         qr.make(fit=True)
@@ -942,7 +953,10 @@ class BotSupervisor:
             invite = encode_invite_link(link)
         except OpaqueInviteError as exc:
             raise BotSupervisorError(f"邀请链接隐私封装失败：{exc}") from exc
-        payload = self.qr_png(invite)
+        try:
+            payload = self.qr_png(invite)
+        except QRCapacityError as exc:
+            raise BotSupervisorError(f"二维码容量不足：{exc}；请改用邀请链接文本分享") from exc
         info: Dict[str, Any] = {
             "bot_id": bot_id,
             "link": invite,

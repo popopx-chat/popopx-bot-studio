@@ -15,7 +15,7 @@
   `/usr/local/bin/popopx-cli`，或用 `--no-node-download` 完全跳过。
 - 模型零下载：`needle3.cact`（33.7 MiB，<50 MB）随仓库内置，加载前做 SHA-256 完整性校验，
   部署启动后即刻可用；没有 C 运行时或 SDK 时自动退回本仓自带的确定性抽取器（第 5 节）。
-- 自检门禁：`python3 -m app.main --self-test` → **24 组 / 7317 条真实断言 / 0 失败 / 约 18.6 秒 / 退出码 0**，
+- 自检门禁：`python3 -m app.main --self-test` → **26 组 / 7710 条真实断言 / 0 失败 / 约 20.5 秒 / 退出码 0**，
   只依赖 `studio/tests/fake_popopx_cli.py`（同样讲真协议、且把 profile 存在 `bot_chat.db` 里的有状态替身），不联网、不连 SMP。
 
 English document: [`README.en.md`](README.en.md)
@@ -31,12 +31,14 @@ English document: [`README.en.md`](README.en.md)
 │ POPOPX Bot Studio (Python 3.11 + FastAPI, 单进程)                  │
 │  main.py        路由、鉴权、生命周期                                            │
 │  config.py      .env / 环境变量 / 权限校验（0700·0600）                          │
-│  database.py    SQLite(WAL) 账本 + schema_migrations（当前 v5）                 │
+│  database.py    SQLite(WAL) 账本 + schema_migrations（当前 v6）                 │
 │  bot_supervisor.py  每 Bot 独立数据目录 + 回环端口 + 包装脚本 + 重连退避          │
 │  ws_protocol.py 与 popopx-cli 的行协议帧、/_address /_create /_send 等指令       │
 │  gateway.py     入站事件 → 规则/路由/插件 → 出站发送，更新缓冲（≤500 条）         │
 │  rule_engine.py 自动回复（exact / prefix / regex / default）                    │
 │  router_engine.py 关键词路由与工单转接                                          │
+│  orchestrator.py 跨 Agent 任务编排：本地授权、超时熔断、扇出聚合、审计回放       │
+│  orchestrator_local.py 只读能力投影（回复/路由/忙闲/摘要/画像），按目标 Bot 隔离 │
 │  plugin_manager.py 插件总线：发现、生命周期、隔离派发、脱敏配置                   │
 │  open_api.py    Telegram 风格开发者 API（/getMe /sendMessage …）                │
 │  i18n.py        18 语种词条、协商、欢迎语模板与完整性断言                        │
@@ -182,7 +184,12 @@ Bot 控制端口不对外发布，源码卷只读挂载，状态存命名卷 `st
 IKM/salt/info/AAD 与 `popopx-service-suite` 的 `opaque_invite_codec.py @ a6c1632`
 逐字节一致，客户端只维护一套解密密钥；封装入参的协议白名单同为
 `popopx:/`、`popopx://`、`https://`，`smp://` 与旧封装向量只作为拒绝用例保留），二维码面板底部的
-折叠区与 `qr.png?raw=1` 才用于原始 `smp://` 地址的高级诊断。
+折叠区与 `qr.png?raw=1` 才用于原始 `smp://` 地址的高级诊断。两个接口的失败口径是分开的：
+Bot 不存在是 404，存在但还没有永久联系地址是 409，封装被白名单或字节上限拒绝也是 409；
+控制台据此在取不到图时照样打开对话框，把失败原因写进「原始诊断地址」抽屉，而不是留一片空白。
+另有一条实测边界：编解码器收 2048 字节明文（与服务套件一致），而二维码 version 40 + 纠错 Q
+的字节容量只有 1663 字符，所以这条带里的地址「能封装、画不出图」——接口回 409 说明容量不足，
+绝不回 500。
 
 替身机器人管理 API 前缀 `/api/agent`（同样要 `require_admin`）：
 `summary` `engine`（GET 读状态 / POST 切换引擎）、`extract`（试一句）、
@@ -190,6 +197,11 @@ IKM/salt/info/AAD 与 `popopx-service-suite` 的 `opaque_invite_codec.py @ a6c16
 `proposals` 与 `proposals/{id}/decision`、`negotiations` 与 `negotiate`、`audit`、
 `guest/links`（GET/POST）、`guest/links/{id}/revoke`、`guest/links/{id}/url`（一次性取回完整链接，
 带 nonce 防重放）、`node`（GET）与 `node/probe`（POST）。
+
+跨 Agent 编排管理 API 同样挂在 `/api/agent`（同样 `require_admin`）：
+`orch`（策略与任务快照）、`orch/grants`（GET/POST）、`orch/grants/{id}/toggle`、
+`orch/grants/{id}/delete`、`orch/dispatch`、`orch/fanout`、`orch/tasks`、
+`orch/tasks/{id}`、`orch/tasks/{id}/cancel`、`orch/replay?correlation_id=`。
 
 访客通道（无需管理令牌，令牌自身即凭据）：`GET /book`、`GET /book/<token>`、
 `POST /book/<token>`（提交时间偏好）、`GET /book/<token>/invite.ics`（主人确认后才发得出 .ics）。
@@ -282,7 +294,26 @@ detail 只允许出现 id、计数和原因码；`converged` 之后**只产出�
 页面是自包含 HTML：不建会话、不发 Cookie、无 `<script>`、无外链、表单 `action=""`、访客输入一律
 HTML 转义，18 语种文案齐全且占位符完全一致。
 
-### 5.6 新增配置键
+### 5.6 通道 C：本机多 Agent 任务编排
+
+一个 Bot 的能力可以按策略借给另一个 Bot，但只在 Studio 进程内、只走五个只读投影
+（`orchestrator_local.py`：`reply.compose` `router.plan` `calendar.availability`
+`workspace.summarize` `ledger.profile`）——不新开端口，不直连 SMP，也不碰别人的账本行。
+
+* **默认拒绝**：`agent_task_grants` 里必须存在 `(origin, target, capability)` 授权，
+  否则派发判 `no_grant`；`target` 允许 `*` 通配，但通配同样要显式建条，可随时停用与删除。
+* **边界**：跳数上限 3（沿 `parent_id` 回溯，成环即拒）、并发上限 32、单任务超时
+  0.5–300 秒（`asyncio.wait_for` 熔断），扇出目标先去重、最多 8 个，用
+  `shield(gather(...))` 保证部分成功照常聚合、不因一个失败丢掉其余结果。
+* **审计与回放**：每次派发都在 `agent_tasks` 落一行，状态机为
+  `queued/running/succeeded/failed/timeout/refused/cancelled`，带 `correlation_id`、耗时、
+  结果摘要与拒绝原因；子任务沿用父任务的关联号，所以 `orch/replay` 能拼出整棵任务树，
+  控制台「多 Agent 编排」面板据此画时间线与树。硬删除 Bot 时授权与任务一并失效，投影立刻报
+  `unknown_target`。
+* **脱敏**：任何进入 `agent_tasks.detail` 或审计文本的值都先过形状脱敏（`sk-…`、
+  `Bearer …`、`key: …`、URL、多段域名），执行器异常文本同样处理，节点域名不会被日志带走。
+
+### 5.7 新增配置键
 
 | 键 | 默认 | 作用 |
 | --- | --- | --- |
@@ -366,7 +397,7 @@ cd studio
 | 分组 | 断言 | 覆盖 |
 | --- | --- | --- |
 | `config` | 62 | 环境解析、回环约束、权限告警、Mac Node/话术端点非法值拒绝 |
-| `database` | 110 | 账本 CRUD、v1..v5 迁移、软删除、插件配置、提案/协商/访客表 |
+| `database` | 110 | 账本 CRUD、v1..v6 迁移、软删除、插件配置、提案/协商/访客表 |
 | `agent_ledger` | 139 | 提案与协商状态机持久化、审计写入、忙闲缓存、幂等 |
 | `ws_protocol` | 103 | 行协议帧、指令语法、探活命令与错误帧唤醒、异常与超时 |
 | `supervisor` | 86 | 端口分配、隔离目录、包装脚本与首启名片、重连退避 |
@@ -379,7 +410,9 @@ cd studio
 | `web_admin` | 146 | 控制台路由、CSRF/Cookie、越权与审计 |
 | `i18n` | 320 | 18 语种完整性、协商、欢迎语、页面注入 |
 | `web_live` | 60 | 真实 ASGI 生命周期、WebSocket、冷备往返、隐私二维码 |
-| `invite_codec` | 118 | HKDF/ChaCha20 标准向量、service-suite 密钥与两条标准向量逐字节对齐、`URI_SCHEMES` 白名单（旧 `smp://` 向量拒绝解码/编码）、`/i/v1/` 路径主机校验、随机 nonce、明文不泄漏、篡改拒绝 |
+| `invite_codec` | 121 | HKDF/ChaCha20 标准向量、service-suite 密钥与两条标准向量逐字节对齐、`URI_SCHEMES` 白名单（旧 `smp://` 向量拒绝解码/编码）、`/i/v1/` 路径主机校验、随机 nonce、明文不泄漏、篡改拒绝 |
+| `orchestration` | 260 | 进程内跨 Agent 派发的策略闸（默认拒绝、跳数、成环、并发）、超时熔断、异常脱敏、结果聚合与部分成功、取消、回放与任务树、`task_stats`，以及五个投影（profile/reply.compose/router/calendar mask/workspace.summarize）在真实装配栈上的非桩验证 |
+| `qrcode_diag` | 129 | `/qrcode` 与 `/qr.png` 的 404/409/401 封套分家、2048 字节封装上限与 1663 字节二维码容量上限的边界、nonce 每次不同、`contact_address` 回落、`box` 参数夹住、落盘权限 0700/0600，以及控制台降级抽屉的装配顺序（先清残留→请求→409 仍开抽屉） |
 | `bundle` | 281 | 冷备导出/校验/篡改/跨账本迁移/幂等、CLI `invite` 与 `--raw-links` |
 | `eco_cards` | 89 | `::POPOPX_ECO::` 卡片与 `::CB::` 回执编解码、越界字段拒绝 |
 | `ics` | 65 | RFC 5545 转义、UTC 时刻、UID/DUMPSTAMP、时长与跨天 |
@@ -388,8 +421,8 @@ cd studio
 | `a2a` | 220 | 掩码投影、`FORBIDDEN_KEYS` 闸、HMAC 签名与重放、时区求交、状态机 |
 | `guest_portal` | 571 | 令牌签发/验签/过期/撤销/次数预算、并发领取、脱敏空档、.ics 门槛、页面转义 |
 | `agent_engine` | 3552 | Needle 3 抽取与确定性回退、权重 SHA-256 门禁、偏好规则、话术与推理桥降级、密钥卫生 |
-| `agent_console` | 389 | `/api/agent/*` 与 `/book/*` 路由、鉴权、面板数据结构、18 语种词条 |
-| 合计 | **7317** | 24/24 组 0 失败，退出码 0 |
+| `agent_console` | 390 | `/api/agent/*` 与 `/book/*` 路由、鉴权、面板数据结构、18 语种词条 |
+| 合计 | **7710** | 26/26 组 0 失败，退出码 0 |
 
 ## 10. 运维与安全注意
 
