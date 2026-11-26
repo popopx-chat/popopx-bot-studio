@@ -971,7 +971,7 @@ def build_parser() -> argparse.ArgumentParser:
             "POPOPX Bot Studio 离线冷备工具：导出 / 校验 / 迁移恢复 / 邀请链接生成单个 Bot 的冷备包。\n"
             "复用 app.main.build_stack 与 BotSupervisor.export_bundle/import_bundle，"
             "产物与管理后台「一键冷备」完全一致。\n"
-            "invite 与 list 默认只输出 https://popopx.chat.<密文> 隐私封装邀请链接；"
+            "invite 与 list 默认只输出 https://popopx.chat/i/v1/<密文> 隐私封装邀请链接；"
             "--raw / --raw-links 才输出原始 smp:// 地址。\n"
             "全程离线：不启动 Web 服务、不拉起 popopx-cli、不监听任何端口。"
         ),

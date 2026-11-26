@@ -1,6 +1,6 @@
 {
   "format": "popopx-opaque-invite-v1",
-  "link_prefix": "https://popopx.chat.",
+  "link_prefix": "https://popopx.chat/i/v1/",
   "encoding": "base64url-unpadded(nonce || ciphertext || tag)",
   "key_derivation": {
     "algorithm": "HKDF-SHA256",
@@ -38,21 +38,21 @@
       "address": "smp://f2X5hAgHZW9-SVkhMou0sUFg3AHUi2pE3kSw46AiGjY=@smp1.popopx.im/quheabd5hdghpztkw53fho6fki722npoytgvkutnbh3gtpgrlna5ukad#/?v=1-2",
       "nonce_hex": "000102030405060708090a0b",
       "token": "AAECAwQFBgcICQoLRRMMxfY-HuIjFeZ-LyP5_Mo5N65NEfeiCDhmCfPZ0Vz4yfKN661UD32XUrkhXlUARvn03RP68swrJh_jpmcAI3DqmF6VkEV_br8mo8oQRiQaofJoPitC4xurSAlVBv4uoujDQn29jiH3G8GbrULYq9sh59HRAznG87BSxXo4F_hrPAvMgd5lIweB57BzBcGaVRA",
-      "link": "https://popopx.chat.AAECAwQFBgcICQoLRRMMxfY-HuIjFeZ-LyP5_Mo5N65NEfeiCDhmCfPZ0Vz4yfKN661UD32XUrkhXlUARvn03RP68swrJh_jpmcAI3DqmF6VkEV_br8mo8oQRiQaofJoPitC4xurSAlVBv4uoujDQn29jiH3G8GbrULYq9sh59HRAznG87BSxXo4F_hrPAvMgd5lIweB57BzBcGaVRA"
+      "link": "https://popopx.chat/i/v1/AAECAwQFBgcICQoLRRMMxfY-HuIjFeZ-LyP5_Mo5N65NEfeiCDhmCfPZ0Vz4yfKN661UD32XUrkhXlUARvn03RP68swrJh_jpmcAI3DqmF6VkEV_br8mo8oQRiQaofJoPitC4xurSAlVBv4uoujDQn29jiH3G8GbrULYq9sh59HRAznG87BSxXo4F_hrPAvMgd5lIweB57BzBcGaVRA"
     },
     {
       "name": "https-short",
       "address": "https://smp8.popopx.im/a#lrdvu2d8A1GumSmoKb2krQmtKhWXq-tyGpHuM7aMwsw",
       "nonce_hex": "fffefdfcfbfaf9f8f7f6f5f4",
       "token": "__79_Pv6-fj39vX0sBOOhWWkCqkcUCtMieSGZSHZwMGSwAprqPBdtSLMi5WPHT-M3uePVl6vQuEIIZtEf1emyrRBpSglGCJomIFuJ3xDkPnt77moOdVoTFcYVMj8hKiZ",
-      "link": "https://popopx.chat.__79_Pv6-fj39vX0sBOOhWWkCqkcUCtMieSGZSHZwMGSwAprqPBdtSLMi5WPHT-M3uePVl6vQuEIIZtEf1emyrRBpSglGCJomIFuJ3xDkPnt77moOdVoTFcYVMj8hKiZ"
+      "link": "https://popopx.chat/i/v1/__79_Pv6-fj39vX0sBOOhWWkCqkcUCtMieSGZSHZwMGSwAprqPBdtSLMi5WPHT-M3uePVl6vQuEIIZtEf1emyrRBpSglGCJomIFuJ3xDkPnt77moOdVoTFcYVMj8hKiZ"
     },
     {
       "name": "popopx-scheme",
       "address": "popopx:/fakepermanentlink",
       "nonce_hex": "000000000000000000000001",
       "token": "AAAAAAAAAAAAAAABsy74f6yOknQfKhut2PEhxRKCnOPGFs2ec8M68x48EJvnPWSchFysbPw",
-      "link": "https://popopx.chat.AAAAAAAAAAAAAAABsy74f6yOknQfKhut2PEhxRKCnOPGFs2ec8M68x48EJvnPWSchFysbPw"
+      "link": "https://popopx.chat/i/v1/AAAAAAAAAAAAAAABsy74f6yOknQfKhut2PEhxRKCnOPGFs2ec8M68x48EJvnPWSchFysbPw"
     }
   ]
 }

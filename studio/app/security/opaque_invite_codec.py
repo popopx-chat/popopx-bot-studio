@@ -2,7 +2,12 @@
 
 Wire format::
 
-    link  = "https://popopx.chat." + base64url(nonce || ciphertext || tag)
+    link  = "https://popopx.chat/i/v1/" + base64url(nonce || ciphertext || tag)
+
+点号拼接的 ``https://popopx.chat.<token>`` 不可用：ciphertext 远超 DNS 单标签
+63 字符上限，最后一个标签会被解析成 TLD。``/i/v1/`` 路径与
+``popopx-service-suite`` 的 ``opaque_invite_codec.LINK_PREFIX`` 逐字一致，
+``popopx.chat`` 也是客户端 associated-domain 白名单里的唯一 HTTPS 邀请主机。
 
 * key   = HKDF-SHA256(ikm=MASTER_KEY, salt=HKDF_SALT, info=HKDF_INFO, len=32)
 * nonce = 12 字节随机数，每条链接独立生成
@@ -28,7 +33,7 @@ from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 FORMAT_VERSION = 1
-LINK_PREFIX = "https://popopx.chat."
+LINK_PREFIX = "https://popopx.chat/i/v1/"
 NONCE_BYTES = 12
 TAG_BYTES = 16
 KEY_BYTES = 32
@@ -95,7 +100,7 @@ def _clean_address(address: str) -> str:
 
 
 def encode_invite_link(address: str, *, nonce: Optional[bytes] = None) -> str:
-    """把原始 ``smp://`` 联系地址封装为 ``https://popopx.chat.<Base64URL>``。
+    """把原始 ``smp://`` 联系地址封装为 ``https://popopx.chat/i/v1/<Base64URL>``。
 
     ``nonce`` 只用于跨语言测试向量的确定性复现；生产调用一律省略，由
     :func:`secrets.token_bytes` 生成 12 字节随机 nonce。
@@ -110,7 +115,7 @@ def encode_invite_link(address: str, *, nonce: Optional[bytes] = None) -> str:
 
 
 def decode_invite_link(link: str) -> str:
-    """解封 ``https://popopx.chat.<Base64URL>``，返回原始联系地址。
+    """解封 ``https://popopx.chat/i/v1/<Base64URL>``，返回原始联系地址。
 
     密文被截断、篡改或密钥不匹配时抛 :class:`OpaqueInviteError`，绝不返回半截明文。
     """

@@ -31,6 +31,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from urllib.parse import urlsplit
 
 from .agent_admin import ADMIN_PREFIX as AGENT_API_PREFIX
 from .agent_preferences import PREFERENCES_FILENAME
@@ -5302,6 +5303,8 @@ def group_invite_codec(test: SelfTest, h: Harness) -> None:
     doc = json.loads(vectors_path.read_text(encoding="utf-8"))
     t.eq("向量格式名", doc["format"], "popopx-opaque-invite-v1")
     t.eq("向量链接前缀与实现一致", doc["link_prefix"], INVITE_LINK_PREFIX)
+    t.eq("链接前缀是服务端 v1 路径", INVITE_LINK_PREFIX, "https://popopx.chat/i/v1/")
+    t.eq("链接不再点号拼接主机名", INVITE_LINK_PREFIX.startswith("https://popopx.chat."), False)
     t.eq("格式版本为 1", INVITE_FORMAT_VERSION, 1)
     t.eq("nonce 12 字节", INVITE_NONCE_BYTES, 12)
     t.eq("tag 16 字节", INVITE_TAG_BYTES, 16)
@@ -5349,6 +5352,10 @@ def group_invite_codec(test: SelfTest, h: Harness) -> None:
         t.eq(f"向量 {name} 前 12 字节是 nonce", raw[:INVITE_NONCE_BYTES], nonce)
         t.eq(f"向量 {name} 不含明文节点域名", "popopx.im" in vector["link"], False)
         t.eq(f"向量 {name} 不含明文协议头", "smp://" in vector["link"], False)
+        parts = urlsplit(vector["link"])
+        t.eq(f"向量 {name} 主机是 popopx.chat", parts.hostname, "popopx.chat")
+        t.eq(f"向量 {name} 路径是 /i/v1/<token>", parts.path, "/i/v1/" + vector["token"])
+        t.eq(f"向量 {name} 无端口无查询", (parts.port, parts.query), (None, ""))
 
     sample = doc["vectors"][0]
     fixed = encode_invite_link(sample["address"], nonce=bytes.fromhex(sample["nonce_hex"]))
@@ -5375,6 +5382,8 @@ def group_invite_codec(test: SelfTest, h: Harness) -> None:
     t.raises("带填充的 token 被拒", OpaqueInviteError, decode_invite_link, sample["link"] + "=")
     t.raises("错误前缀被拒", OpaqueInviteError, decode_invite_link,
              "https://popopx.im." + token)
+    t.raises("旧点号前缀被拒", OpaqueInviteError, decode_invite_link,
+             "https://popopx.chat." + token)
     t.raises("原始 smp:// 不是封装链接", OpaqueInviteError, decode_invite_link, sample["address"])
     t.raises("非字符串链接被拒", OpaqueInviteError, decode_invite_link, 12345)
     t.raises("超长 token 被拒", OpaqueInviteError, decode_invite_link, INVITE_LINK_PREFIX + "A" * (INVITE_MAX_TOKEN_CHARS + 1))
