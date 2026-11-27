@@ -13,7 +13,7 @@
   屏蔽时段一律按 **ISO 星期**（1=周一 … 7=周日）判定；候选时刻永远按它自己的墙钟比较。
 * ``reasoner_bridge``：大模型只写话术，拿不到工具、不能落库；未启用、超时、非 200、返回
   垃圾都只是「这一条用了模板」，不是功能失效；API Key 不得出现在提示词、状态或 repr 里。
-* ``agent_copy``：18 语种 × 12 话术的键集与占位符集必须完全对齐，且某一种语言里断言的
+* ``agent_copy``：21 语种 × 12 话术的键集与占位符集必须完全对齐，且某一种语言里断言的
   事实不能被另一种语言反驳（本仓刚被「一种语言多说了一句另外 17 种都没有的话」咬过）。
 """
 
@@ -1385,10 +1385,10 @@ _BRACE_RE = re.compile(r"[{}]")
 
 
 def _copy_locale_parity(test: SelfTest, h: Harness) -> None:
-    """18 语种 × 12 话术的键集合必须完全一致。"""
+    """21 语种 × 12 话术的键集合必须完全一致。"""
     locales = list(i18n.LOCALES)
-    test.eq("LOCALES 有 18 个", len(locales), 18)
-    test.eq("LOCALES 无重复", len(set(locales)), 18)
+    test.eq("LOCALES 有 21 个", len(locales), 21)
+    test.eq("LOCALES 无重复", len(set(locales)), 21)
     test.eq("回退语种是 en", i18n.FALLBACK_LOCALE, "en")
     test.eq("回退语种在目录里", i18n.FALLBACK_LOCALE in locales, True)
     test.eq("话术种类有 12 条", len(agent_copy.KINDS), 12)
@@ -1408,10 +1408,17 @@ def _copy_locale_parity(test: SelfTest, h: Harness) -> None:
             test.check(f"{kind}/{code} 是字符串", isinstance(value, str), type(value).__name__)
             test.check(f"{kind}/{code} 非空白", bool(value.strip()), repr(value)[:40])
         test.eq(f"{code} 每条都有译文覆盖",
-                [k for k in agent_copy.KINDS if len(agent_copy.locales_for(k)) != 18], [])
+                [k for k in agent_copy.KINDS if len(agent_copy.locales_for(k)) != len(locales)], [])
+    hangul = re.compile(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]")
+    arabic = re.compile(r"[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff\ufb50-\ufdff\ufe70-\ufeff]")
+    test.eq("韩文话术全部含谚文", [k for k, v in agent_copy.CATALOG["ko"].items() if not hangul.search(v)], [])
+    test.eq("阿拉伯语话术全部含阿拉伯字母", [k for k, v in agent_copy.CATALOG["ar"].items() if not arabic.search(v)], [])
+    for code in ("ko", "ar", "pt-BR"):
+        test.eq(f"{code} 没有照抄英文的话术",
+                [k for k, v in agent_copy.CATALOG[code].items() if v == agent_copy.CATALOG["en"][k]], [])
     test.eq("目录整体自检无问题", agent_copy.assert_catalog(), [])
     report = agent_copy.parity_report()
-    test.eq("parity_report 覆盖 18 语种", len(report), 18)
+    test.eq("parity_report 覆盖 21 语种", len(report), len(locales))
     test.check("parity_report 全绿", all(row["aligned"] for row in report.values()),
                str([k for k, v in report.items() if not v["aligned"]]))
     test.eq("parity_report 字段", sorted(report["en"]),
@@ -1470,7 +1477,7 @@ def _copy_placeholder_hygiene(test: SelfTest, h: Harness) -> None:
     test.eq("目录恢复后自检重新通过", agent_copy.assert_catalog(), [])
     test.eq("catalog_payload 字段", sorted(agent_copy.catalog_payload()),
             sorted(["fallback", "locales", "kinds", "placeholders", "kind_for_tool", "templates"]))
-    test.eq("payload 语种数", len(agent_copy.catalog_payload()["locales"]), 18)
+    test.eq("payload 语种数", len(agent_copy.catalog_payload()["locales"]), len(i18n.LOCALES))
     ok(test, "agent_copy 占位符卫生")
 
 
@@ -1512,7 +1519,7 @@ def _copy_fill(test: SelfTest, h: Harness) -> None:
                                                                   "timezone": "UTC",
                                                                   "code": "AB12"}, locale="en").count("{"), 0)
     preview = agent_copy.preview("cancel_confirm", {"title": "X", "start": "10:00", "timezone": "UTC"})
-    test.eq("preview 覆盖 18 语种", len(preview), 18)
+    test.eq("preview 覆盖 21 语种", len(preview), len(i18n.LOCALES))
     test.check("preview 无残留槽位", all("{" not in v for v in preview.values()),
                str([k for k, v in preview.items() if "{" in v]))
     ok(test, "agent_copy fill")
@@ -1522,7 +1529,8 @@ def _copy_locale_resolution(test: SelfTest, h: Harness) -> None:
     """resolve_locale：精确 → 主语言 → 中文变体桥接 → 回退 en。"""
     for raw, want in [("en", "en"), ("EN", "en"), ("en-US", "en"), ("en_GB", "en"),
                       ("de-DE", "de"), ("de", "de"), ("fr", "fr"), ("es-MX", "es"),
-                      ("ru-RU", "ru"), ("pt-BR", "en"), ("ja", "ja"), ("th", "th"),
+                      ("ru-RU", "ru"), ("pt-BR", "pt-BR"), ("pt-PT", "pt-BR"), ("pt", "pt-BR"),
+                      ("ko-KR", "ko"), ("ar-EG", "ar"), ("ja", "ja"), ("th", "th"),
                       ("zh", "zh-Hans"), ("zh-CN", "zh-Hans"), ("zh-Hans", "zh-Hans"),
                       ("zh-TW", "zh-Hant"), ("zh-HK", "zh-Hant"), ("zh-Hant", "zh-Hant"),
                       ("", "en"), ("   ", "en"), ("klingon", "en")]:
@@ -1538,14 +1546,14 @@ def _copy_locale_resolution(test: SelfTest, h: Harness) -> None:
 
 
 def _copy_kinds(test: SelfTest, h: Harness) -> None:
-    """KIND_FOR_TOOL 覆盖 needle3 的五个工具，每个 kind 都有 18 份文案。"""
+    """KIND_FOR_TOOL 覆盖 needle3 的五个工具，每个 kind 都有 21 份文案。"""
     table = agent_copy.KIND_FOR_TOOL
     test.eq("五个工具都有 kind", len(table), 5)
     test.eq("工具名与 needle3 一致", sorted(table), sorted(needle3_runtime.TOOL_NAMES))
     for dotted, kind in table.items():
         test.check(f"{dotted} 的 kind 非空", bool(str(kind).strip()), repr(kind))
         test.contains(f"{kind} 在 KINDS 里", agent_copy.KINDS, kind)
-        test.eq(f"{dotted} 的话术齐全", len(agent_copy.locales_for(kind)), 18)
+        test.eq(f"{dotted} 的话术齐全", len(agent_copy.locales_for(kind)), len(i18n.LOCALES))
         for code in i18n.LOCALES:
             test.check(f"{dotted}→{kind}/{code} 有文案",
                        bool(agent_copy.CATALOG[code][kind].strip()), code)

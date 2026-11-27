@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlsplit
 
-from .i18n import FALLBACK_LOCALE, normalize_locale
+from .i18n import FALLBACK_LOCALE, LOCALES, normalize_locale
 
 DEFAULT_PORT = 8090
 DEFAULT_HOST = "127.0.0.1"
@@ -444,7 +444,7 @@ def load_settings(
     )
     if raw_locale and locale != raw_locale:
         settings.startup_warnings.append(
-            f"STUDIO_LOCALE={raw_locale} 不在 18 语种支持列表内，已回退到 {locale}"
+            f"STUDIO_LOCALE={raw_locale} 不在 {len(LOCALES)} 语种支持列表内，已回退到 {locale}"
         )
     settings.startup_warnings.extend(settings.security_warnings())
     if not admin_token:

@@ -144,11 +144,13 @@ from .i18n import (
     FALLBACK_LOCALE,
     LOCALE_LABELS,
     LOCALES,
+    RTL_LOCALES,
     WELCOME_PLACEHOLDERS,
     admin_strings,
     assert_catalogs,
     catalog_payload,
     detect_locale,
+    is_rtl,
     extra_keys,
     fill_placeholders,
     is_supported,
@@ -578,9 +580,9 @@ def group_config(test: SelfTest, h: Harness) -> None:
     t.check("缺少令牌时给出警告", any("STUDIO_ADMIN_TOKEN" in w for w in no_token.startup_warnings), str(no_token.startup_warnings))
     missing_cli = load_settings(h.env(CLI_BIN_PATH=str(h.root / "nope")))
     t.check("缺少二进制时给出警告", any("CLI 二进制" in w for w in missing_cli.startup_warnings), str(missing_cli.startup_warnings))
-    bad_locale = load_settings(h.env(STUDIO_LOCALE="ko"))
+    bad_locale = load_settings(h.env(STUDIO_LOCALE="vi"))
     t.eq("不支持语种回退 en", bad_locale.default_locale, "en")
-    t.check("不支持语种有警告", any("STUDIO_LOCALE=ko" in w for w in bad_locale.startup_warnings), str(bad_locale.startup_warnings))
+    t.check("不支持语种有警告", any("STUDIO_LOCALE=vi" in w for w in bad_locale.startup_warnings), str(bad_locale.startup_warnings))
     th_locale = load_settings(h.env(STUDIO_LOCALE="th"))
     t.eq("受支持语种生效", th_locale.default_locale, "th")
 
@@ -662,11 +664,11 @@ def group_database(test: SelfTest, h: Harness) -> None:
     t.raises("重名拒绝", LedgerError, db.create_bot, "support", 5351)
     t.raises("端口冲突拒绝", LedgerError, db.create_bot, "other", 5350)
     t.raises("非法名称拒绝", LedgerError, db.create_bot, "bad name!", 5352)
-    unknown_locale = db.create_bot("localex", 5353, default_locale="ko")
-    t.eq("未知语种由账本原样保存", unknown_locale["default_locale"], "ko")
-    t.eq("未知语种归一化为空串", normalize_locale("ko"), "")
-    t.eq("空串由调用点回退到基准语种", normalize_locale("ko") or FALLBACK_LOCALE, "en")
-    t.eq("回退语种有词条", len(admin_strings("ko")), len(admin_strings("en")))
+    unknown_locale = db.create_bot("localex", 5353, default_locale="vi")
+    t.eq("未知语种由账本原样保存", unknown_locale["default_locale"], "vi")
+    t.eq("未知语种归一化为空串", normalize_locale("vi"), "")
+    t.eq("空串由调用点回退到基准语种", normalize_locale("vi") or FALLBACK_LOCALE, "en")
+    t.eq("回退语种有词条", len(admin_strings("vi")), len(admin_strings("en")))
     t.raises("名称太短拒绝", LedgerError, db.create_bot, "kr", 5354)
 
     t.eq("端口分配跳过占用", db.next_free_port(5350, 5399), 5351)
@@ -2528,7 +2530,7 @@ def group_web_admin(test: SelfTest, h: Harness) -> None:
     t.contains("页面是 HTML", page.headers["content-type"], "text/html")
     t.check("目录标记已被替换", CATALOG_MARKER not in page.text, "标记仍在")
     t.check("页面内嵌了词条目录", '"fallback":"en"' in page.text, page.text[:120])
-    t.check("内嵌目录含全部 18 语种", all(f'"{lc}"' in page.text for lc in LOCALES), "缺语种")
+    t.check("内嵌目录含全部 21 语种", all(f'"{lc}"' in page.text for lc in LOCALES), "缺语种")
     t.eq("产品官网可访问", c.get("/site").status_code, 200)
     t.eq("官网带 index.html 路径", c.get("/site/index.html").status_code, 200)
     t.check("官网同样注入目录", CATALOG_MARKER not in c.get("/site").text)
@@ -2545,17 +2547,17 @@ def group_web_admin(test: SelfTest, h: Harness) -> None:
     t.eq("会话目录自检无问题", session["catalog_problems"], [])
     t.eq("会话版本号", session["version"], APP_VERSION)
     t.eq("会话语种跟随查询串", c.get(f"{api}/session", headers=a, params={"locale": "ru"}).json()["locale"], "ru")
-    t.eq("非法语种回退默认", c.get(f"{api}/session", headers=a, params={"locale": "ko"}).json()["locale"], "en")
+    t.eq("非法语种回退默认", c.get(f"{api}/session", headers=a, params={"locale": "vi"}).json()["locale"], "en")
     t.eq("Accept-Language 参与协商",
          c.get(f"{api}/session", headers={**a, "Accept-Language": "de-DE,de;q=0.9"}).json()["locale"], "de")
     t.eq("无法识别的浏览器语言回退 en",
-         c.get(f"{api}/session", headers={**a, "Accept-Language": "ko-KR"}).json()["locale"], "en")
+         c.get(f"{api}/session", headers={**a, "Accept-Language": "vi-VN"}).json()["locale"], "en")
 
     payload = c.get("/api/i18n/payload").json()
-    t.eq("payload 六段词条齐全", sorted(payload), ["admin", "fallback", "labels", "locales", "ok", "site", "welcome"])
+    t.eq("payload 七段词条齐全", sorted(payload), ["admin", "fallback", "labels", "locales", "ok", "rtl", "site", "welcome"])
     t.eq("payload 语种顺序与后端一致", payload["locales"], list(LOCALES))
     t.eq("payload 每语种都有后台词条", len({k for k in payload["admin"]}), len(LOCALES))
-    t.eq("payload 欢迎语覆盖 18 语种", len(payload["welcome"]), len(LOCALES))
+    t.eq("payload 欢迎语覆盖 21 语种", len(payload["welcome"]), len(LOCALES))
     t.eq("payload 语言菜单", len(payload["labels"]), len(LOCALES))
     t.eq("payload 回退语种", payload["fallback"], FALLBACK_LOCALE)
     thai = c.get("/api/i18n", params={"locale": "th"}).json()
@@ -2564,7 +2566,7 @@ def group_web_admin(test: SelfTest, h: Harness) -> None:
     t.contains("欢迎语模板保留占位符", thai["welcome"], "{bot_name}")
 
     parity = c.get(f"{api}/i18n/parity", headers=a).json()
-    t.eq("对齐接口列出 18 语种", parity["locales"], list(LOCALES))
+    t.eq("对齐接口列出 21 语种", parity["locales"], list(LOCALES))
     t.eq("对齐接口无问题", parity["problems"], [])
     t.check("后台词条全部对齐", all(v["aligned"] for v in parity["parity"]["admin"].values()),
             str(parity["parity"]["admin"]))
@@ -2591,9 +2593,9 @@ def group_web_admin(test: SelfTest, h: Harness) -> None:
 
     t.eq("空名单无 Bot", c.get(f"{api}/bots", headers=a).json()["bots"], [])
     t.eq("建 Bot 缺名字 400", c.post(f"{api}/bots", headers=a, json={}).json()["description"], "name 不能为空")
-    bad_locale = c.post(f"{api}/bots", headers=a, json={"name": "nope1", "default_locale": "ko"})
+    bad_locale = c.post(f"{api}/bots", headers=a, json={"name": "nope1", "default_locale": "vi"})
     t.eq("不支持的语种直接拒绝", (bad_locale.status_code, bad_locale.json()["error_code"]), (400, 400))
-    t.contains("拒绝原因点名语种", bad_locale.json()["description"], "'ko'")
+    t.contains("拒绝原因点名语种", bad_locale.json()["description"], "'vi'")
     ugly = c.post(f"{api}/bots", headers=a, json={"name": "BAD NAME", "start": False})
     t.contains("非法名字被账本挡下", ugly.json()["description"], "仅允许小写字母")
     made = c.post(f"{api}/bots", headers=a, json={"name": "webbot", "default_locale": "de", "start": False})
@@ -2623,7 +2625,7 @@ def group_web_admin(test: SelfTest, h: Harness) -> None:
          c.patch(f"{api}/bots/{bid}", headers=a, json={"display_name": "在线客服"}).json()["bot"]["display_name"],
          "在线客服")
     t.eq("PATCH 非法语种被拒",
-         c.patch(f"{api}/bots/{bid}", headers=a, json={"default_locale": "ko"}).status_code, 400)
+         c.patch(f"{api}/bots/{bid}", headers=a, json={"default_locale": "vi"}).status_code, 400)
     empty_patch = c.patch(f"{api}/bots/{bid}", headers=a, json={})
     t.eq("PATCH 空更新被拒", empty_patch.status_code, 400)
     t.contains("PATCH 列出允许字段", empty_patch.json()["description"], "welcome_text")
@@ -2733,16 +2735,16 @@ def group_web_admin(test: SelfTest, h: Harness) -> None:
 
 # --------------------------------------------------------------------------- 13
 def group_i18n(test: SelfTest, h: Harness) -> None:
-    """18 语种目录完整性、语言检测与协商、页面词条覆盖、默认欢迎语填充。"""
+    """21 语种目录完整性、语言检测与协商、RTL 元数据、页面词条覆盖、默认欢迎语填充。"""
     t = test
     en_admin = admin_strings("en")
     en_site = site_strings("en")
 
-    t.eq("语种集合逐字对齐 iOS 客户端", LOCALES,
-         ("en", "zh-Hans", "zh-Hant", "ja", "bg", "cs", "de", "es", "fi", "fr",
-          "hu", "it", "nl", "pl", "ru", "th", "tr", "uk"))
-    t.eq("语种总数 18", len(LOCALES), 18)
-    t.eq("语种不重复", len(set(LOCALES)), 18)
+    t.eq("语种集合= iOS 18 语种 + Web 扩展 3 语种", LOCALES,
+         ("en", "zh-Hans", "zh-Hant", "ja", "ar", "bg", "cs", "de", "es", "fi", "fr",
+          "hu", "it", "ko", "nl", "pl", "pt-BR", "ru", "th", "tr", "uk"))
+    t.eq("语种总数 21", len(LOCALES), 21)
+    t.eq("语种不重复", len(set(LOCALES)), 21)
     t.eq("基准语种是英文", FALLBACK_LOCALE, "en")
     t.check("基准语种在集合内", FALLBACK_LOCALE in LOCALES, FALLBACK_LOCALE)
     t.eq("每个语种都有本地名称", sorted(LOCALE_LABELS), sorted(LOCALES))
@@ -2750,31 +2752,39 @@ def group_i18n(test: SelfTest, h: Harness) -> None:
     t.eq("简体中文标签", LOCALE_LABELS["zh-Hans"], "简体中文")
     t.eq("繁体中文标签", LOCALE_LABELS["zh-Hant"], "繁體中文")
     t.eq("泰文标签用泰文书写", LOCALE_LABELS["th"], "ไทย")
+    t.eq("新增语种标签", (LOCALE_LABELS["pt-BR"], LOCALE_LABELS["ko"], LOCALE_LABELS["ar"]),
+         ("Português (Brasil)", "한국어", "العربية"))
+    t.eq("RTL 语种表", RTL_LOCALES, ("ar",))
+    t.eq("RTL 判定 ar-EG", is_rtl("ar-EG"), True)
+    t.eq("RTL 判定 en-US", is_rtl("en-US"), False)
+    t.eq("目录负载带 RTL 表", catalog_payload()["rtl"], ["ar"])
 
     for raw, want in (("zh", "zh-Hans"), ("zh_CN", "zh-Hans"), ("zh-Hant-TW", "zh-Hant"),
                       ("zh-hk", "zh-Hant"), ("nl-BE", "nl"), ("de-DE", "de"), ("EN", "en"),
-                      ("ja-JP", "ja"), ("fr_fr", "fr"), ("pt", ""), ("ko", ""), ("xx-YY", ""),
-                      ("", ""), (None, "")):
+                      ("ja-JP", "ja"), ("fr_fr", "fr"), ("pt", "pt-BR"), ("pt-PT", "pt-BR"),
+                      ("pt_BR", "pt-BR"), ("pt-br", "pt-BR"), ("ko", "ko"), ("ko-KR", "ko"), ("ar", "ar"),
+                      ("ar-EG", "ar"), ("vi", ""), ("xx-YY", ""), ("", ""), (None, "")):
         t.eq(f"标签 {raw!r} 归一化", normalize_locale(raw), want)
-    t.eq("未收录语种判为不支持", [is_supported(x) for x in ("pt", "ko", "zh")], [False, False, True])
+    t.eq("未收录语种判为不支持", [is_supported(x) for x in ("vi", "fil", "zh")], [False, False, True])
     t.eq("Accept-Language 按权重排序",
          parse_accept_language("de-DE,de;q=0.9,en;q=0.8,fr;q=0.5"), ["de-DE", "de", "en", "fr"])
     t.eq("Accept-Language 保留原始顺序",
          parse_accept_language("zh-CN,zh;q=0.9,en;q=0.8"), ["zh-CN", "zh", "en"])
     t.eq("空请求头解析为空列表", parse_accept_language(""), [])
     t.eq("非法权重不影响解析", parse_accept_language("en;q=abc,fr"), ["fr", "en"])
-    t.eq("检测按候选顺序取第一个可用语种", detect_locale(["ko", "nl", "ja"]), "nl")
-    t.eq("检测跳过不支持的候选", detect_locale(["pt;q=0.9", "hu"]), "hu")
-    t.eq("检测接受嵌套候选", detect_locale([[], ["pt", "th"]]), "th")
+    t.eq("检测按候选顺序取第一个可用语种", detect_locale(["vi", "nl", "ja"]), "nl")
+    t.eq("检测跳过不支持的候选", detect_locale(["vi;q=0.9", "hu"]), "hu")
+    t.eq("检测接受嵌套候选", detect_locale([[], ["vi", "th"]]), "th")
+    t.eq("检测把 pt 收敛到 pt-BR", detect_locale(["pt-PT"]), "pt-BR")
     t.eq("无可用候选时回退基准语种", detect_locale([]), FALLBACK_LOCALE)
     menu = language_menu("ja")
-    t.eq("语言菜单含 18 项", len(menu), 18)
+    t.eq("语言菜单含 21 项", len(menu), 21)
     t.eq("语言菜单只有一项选中", [row["locale"] for row in menu if row["selected"]], ["ja"])
     t.eq("语言菜单首项", menu[0], {"locale": "en", "label": "English", "selected": False})
 
     t.eq("目录只有后台与官网两套", sorted(CATALOGS), ["admin", "site"])
-    t.eq("后台目录覆盖 18 语种", sorted(CATALOGS["admin"]), sorted(LOCALES))
-    t.eq("官网目录覆盖 18 语种", sorted(CATALOGS["site"]), sorted(LOCALES))
+    t.eq("后台目录覆盖 21 语种", sorted(CATALOGS["admin"]), sorted(LOCALES))
+    t.eq("官网目录覆盖 21 语种", sorted(CATALOGS["site"]), sorted(LOCALES))
     t.eq("后台英文基准词条数", len(en_admin), 130)
     t.eq("官网英文基准词条数", len(en_site), 21)
     for locale in LOCALES:
@@ -2787,7 +2797,7 @@ def group_i18n(test: SelfTest, h: Harness) -> None:
     report = parity_report()
     t.eq("对齐报告含两套目录", sorted(report), ["admin", "site"])
     t.eq("对齐报告逐语种", sorted(report["admin"]), sorted(LOCALES))
-    t.check("18 语种全部与 en 逐条对齐",
+    t.check("21 语种全部与 en 逐条对齐",
             all(row["aligned"] for table in report.values() for row in table.values()),
             json.dumps({k: [l for l, r in v.items() if not r["aligned"]] for k, v in report.items()},
                        ensure_ascii=False))
@@ -2803,17 +2813,41 @@ def group_i18n(test: SelfTest, h: Harness) -> None:
         site_diff = sum(1 for key, value in CATALOGS["site"][locale].items() if value != en_site[key])
         t.check(f"{locale} 后台确有本地化译文", admin_diff >= 40, str(admin_diff))
         t.check(f"{locale} 官网确有本地化译文", site_diff >= 15, str(site_diff))
+    shared_ok = {"POPOPX Bot Studio", "Bot factory", "Bot token", "Bots", "Dashboard", "Error",
+                 "Name", "Passphrase (optional)", "Plugins", "Routing", "Status", "Test",
+                 "Trigger", "Open API"}
+    for cat in ("admin", "site"):
+        for locale in LOCALES:
+            if locale == FALLBACK_LOCALE:
+                continue
+            same = {value for key, value in CATALOGS[cat][locale].items() if value == CATALOGS[cat]["en"][key]}
+            t.eq(f"{locale} {cat} 与英文同形的只剩品牌或技术词", sorted(same - shared_ok), [])
+    han_re = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+    hangul_re = re.compile(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]")
+    arabic_re = re.compile(r"[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff\ufb50-\ufdff\ufe70-\ufeff]")
+    for cat in ("admin", "site"):
+        for locale, own, foreign in (("ar", arabic_re, (han_re, hangul_re)),
+                                     ("ko", hangul_re, (han_re, arabic_re)),
+                                     ("pt-BR", None, (han_re, hangul_re, arabic_re))):
+            table = CATALOGS[cat][locale]
+            if own is not None:
+                t.eq(f"{locale} {cat} 全部用本族文字书写",
+                     [key for key, value in table.items()
+                      if key not in ("app_title", "site_title") and not own.search(value)], [])
+            for pattern in foreign:
+                t.eq(f"{locale} {cat} 不混入外来文字",
+                     [key for key, value in table.items() if pattern.search(value)], [])
     t.eq("缺失键回退为键名本身", i18n_t("admin", "de", "no_such_key"), "no_such_key")
-    t.eq("未知语种取词回退英文", i18n_t("admin", "ko", "action_cancel"), en_admin["action_cancel"])
+    t.eq("未知语种取词回退英文", i18n_t("admin", "vi", "action_cancel"), en_admin["action_cancel"])
     mutable = admin_strings("en")
     mutable["action_cancel"] = "被改坏了"
     t.eq("取词返回副本，不污染目录", admin_strings("en")["action_cancel"], "Cancel")
 
-    t.eq("欢迎语目录覆盖 18 语种", sorted(catalog_payload()["welcome"]), sorted(LOCALES))
+    t.eq("欢迎语目录覆盖 21 语种", sorted(catalog_payload()["welcome"]), sorted(LOCALES))
     t.eq("欢迎语占位符约定", WELCOME_PLACEHOLDERS, ("bot_name",))
     for locale in LOCALES:
         t.eq(f"{locale} 欢迎语占位符齐备", placeholders(welcome_template(locale)), {"bot_name"})
-    t.eq("未知语种欢迎语回退英文", welcome_template("ko"), welcome_template("en"))
+    t.eq("未知语种欢迎语回退英文", welcome_template("vi"), welcome_template("en"))
     t.eq("日文欢迎语渲染", render_welcome("ja", bot_name="小助手"),
          "小助手 へようこそ。ご用件をお知らせください。担当者から折り返しご連絡します。")
     t.eq("泰文欢迎语渲染", render_welcome("th", bot_name="store"),
@@ -2830,8 +2864,8 @@ def group_i18n(test: SelfTest, h: Harness) -> None:
          ["admin", "fallback", "labels", "locale", "locales", "ok", "site", "welcome"])
     t.eq("无请求头时跟随服务端默认语种", api["locale"], "ru")
     t.eq("接口回退语种", api["fallback"], "en")
-    t.eq("接口列出 18 语种", api["locales"], list(LOCALES))
-    t.eq("接口语言菜单完整", len(api["labels"]), 18)
+    t.eq("接口列出 21 语种", api["locales"], list(LOCALES))
+    t.eq("接口语言菜单完整", len(api["labels"]), 21)
     t.eq("接口后台词条按语种下发", sorted(api["admin"]), sorted(admin_strings("ru")))
     t.eq("接口官网词条按语种下发", sorted(api["site"]), sorted(site_strings("ru")))
     t.eq("接口欢迎语是模板字符串", api["welcome"], welcome_template("ru"))
@@ -2843,9 +2877,9 @@ def group_i18n(test: SelfTest, h: Harness) -> None:
     t.eq("查询参数优先于请求头",
          c.get("/api/i18n", params={"locale": "ja"}, headers={"Accept-Language": "de"}).json()["locale"], "ja")
     t.eq("不支持的查询语种回退服务端默认",
-         c.get("/api/i18n", params={"locale": "ko"}).json()["locale"], "ru")
+         c.get("/api/i18n", params={"locale": "vi"}).json()["locale"], "ru")
     for header, want in (("de-DE,de;q=0.9,en;q=0.8", "de"), ("ru,en;q=0.5", "ru"),
-                         ("ko,pt", "ru"), ("zh-CN,zh;q=0.9", "zh-Hans"), ("fr-CA,fr;q=0.9", "fr")):
+                         ("vi,fil", "ru"), ("zh-CN,zh;q=0.9", "zh-Hans"), ("fr-CA,fr;q=0.9", "fr")):
         t.eq(f"Accept-Language {header} 协商结果",
              c.get("/api/i18n", headers={"Accept-Language": header}).json()["locale"], want)
     t.eq("全量目录接口与后端同源", c.get("/api/i18n/payload").json(), dict(catalog_payload(), ok=True))
@@ -2870,11 +2904,27 @@ def group_i18n(test: SelfTest, h: Harness) -> None:
     t.eq("官网页 data-i18n 与目录键集完全一致",
          sorted(set(re.findall(r'data-i18n="([a-z0-9_]+)"', site_raw))), sorted(en_site))
     for name, page in (("后台", home_raw), ("官网", site_raw)):
+        t.check(f"{name}页声明自适应视口", 'name="viewport" content="width=device-width' in page, name)
+    t.check("控制台窄屏表格可横向滚动", home_raw.count("overflow-x:auto") >= 8,
+            str(home_raw.count("overflow-x:auto")))
+    t.check("控制台主视图不撑破外层", "overflow-x:hidden" in home_raw, "")
+    t.check("官网代码块内部滚动", "background:#06090e;overflow-x:auto" in site_raw, "")
+    t.check("官网教程网格允许收缩", "grid-template-columns:minmax(0,1fr)}" in site_raw
+            and ".tut>*{min-width:0}" in site_raw, "")
+    for name, page in (("后台", home_raw), ("官网", site_raw)):
         t.check(f"{name}页记住用户选择的语种", "localStorage" in page, name)
         t.check(f"{name}页读取浏览器语言列表", "navigator.languages" in page, name)
         t.check(f"{name}页动态生成语种选项", 'createElement("option")' in page, name)
         t.check(f"{name}页有语言切换器", "<select" in page, name)
         t.check(f"{name}页切换语种不刷新页面", "replaceState" in page or "location.reload" not in page, name)
+        t.check(f"{name}页按语种切换根节点 dir", 'setAttribute("dir", isRtl ? "rtl" : "ltr")' in page, name)
+        t.check(f"{name}页同步根节点 lang", "document.documentElement.lang = cur" in page, name)
+        t.check(f"{name}页内建 RTL 语种表", 'rtl: ["ar"]' in page, name)
+        t.check(f"{name}页有 RTL 样式覆盖", '[dir="rtl"]' in page, name)
+        t.check(f"{name}页用逻辑属性排版",
+                any(prop in page for prop in ("margin-inline", "padding-inline", "inset-inline")), name)
+        t.check(f"{name}页技术块隔离双向文本", "unicode-bidi:isolate" in page, name)
+        t.check(f"{name}页 pre 全部钉死 LTR", page.count("<pre") == page.count('<pre dir="ltr"'), name)
 
     bots: Dict[str, Dict[str, Any]] = {}
     for locale in LOCALES:
@@ -2884,7 +2934,7 @@ def group_i18n(test: SelfTest, h: Harness) -> None:
         bots[locale] = made
         t.eq(f"{locale} 记录该语种", made["i18n"]["locale"], locale)
         t.eq(f"{locale} 欢迎语按该语种填充", made["i18n"]["welcome"], render_welcome(locale, bot_name=name))
-    t.eq("18 语种欢迎语互不相同", len({row["i18n"]["welcome"] for row in bots.values()}), 18)
+    t.eq("21 语种欢迎语互不相同", len({row["i18n"]["welcome"] for row in bots.values()}), 21)
     inherited = c.post(f"{API_PREFIX}/bots", headers=a, json={"name": "i18ninherit", "start": False}).json()
     t.eq("未指定语种时继承服务端默认", inherited["i18n"]["locale"], "ru")
     t.eq("继承的欢迎语是俄文模板", inherited["i18n"]["welcome"],
@@ -2896,9 +2946,9 @@ def group_i18n(test: SelfTest, h: Harness) -> None:
                     json={"name": "i18ncustom", "start": False, "welcome_text": "只有一句", "default_locale": "ja"}).json()
     t.eq("自定义欢迎语原样保留", custom["i18n"]["welcome"], "只有一句")
     bad_locale = c.post(f"{API_PREFIX}/bots", headers=a,
-                        json={"name": "i18nbad", "start": False, "default_locale": "ko"}).json()
+                        json={"name": "i18nbad", "start": False, "default_locale": "vi"}).json()
     t.eq("建 Bot 拒绝不支持的语种", (bad_locale["ok"], bad_locale["error_code"]), (False, 400))
-    t.contains("拒绝原因点名语种", bad_locale["description"], "不支持的语种 'ko'")
+    t.contains("拒绝原因点名语种", bad_locale["description"], "不支持的语种 'vi'")
 
     target = str(inherited["bot"]["id"])
     patched = c.patch(f"{API_PREFIX}/bots/{target}", headers=a, json={"default_locale": "th"}).json()
@@ -4769,7 +4819,7 @@ def group_agent_console(test: SelfTest, h: Harness) -> None:
     t.eq("显式时区优先于偏好", zone["timezone"], "Europe/Berlin")
     t.eq("显式语种优先于偏好", zone["locale"], "de")
     t.eq("非法语种回退而不报错",
-         c.post(f"{api}/extract", headers=a, json={"text": "hi", "locale": "ko"}).json()["locale"] in LOCALES,
+         c.post(f"{api}/extract", headers=a, json={"text": "hi", "locale": "vi"}).json()["locale"] in LOCALES,
          True)
     t.eq("不点名 Bot 也能试路由", c.post(f"{api}/extract", headers=a,
                           json={"text": "hi"}).json()["bot_id"], "")
@@ -4815,9 +4865,9 @@ def group_agent_console(test: SelfTest, h: Harness) -> None:
                          json={"keywords": {"boost": [{"term": "roadmap", "weight": 99}]}}).status_code, 400)
     t.eq("非法时区被拒", c.post(f"{api}/prefs/{bid}", headers=a,
                   json={"timezone": "Nowhere/Zone"}).status_code, 400)
-    t.eq("非法语种被拒", c.post(f"{api}/prefs/{bid}", headers=a, json={"locale": "ko"}).status_code, 400)
+    t.eq("非法语种被拒", c.post(f"{api}/prefs/{bid}", headers=a, json={"locale": "vi"}).status_code, 400)
     t.check("校验失败带字段名", "locale" in c.post(f"{api}/prefs/{bid}", headers=a,
-                              json={"locale": "ko"}).json()["description"], "")
+                              json={"locale": "vi"}).json()["description"], "")
     t.eq("被拒的写入不落盘", c.get(f"{api}/prefs/{bid}", headers=a).json()["preferences"]["timezone"],
          default_zone)
     wrapped = c.post(f"{api}/prefs/{bid}", headers=a,
@@ -5291,7 +5341,7 @@ def group_agent_console(test: SelfTest, h: Harness) -> None:
     en_admin = admin_strings("en")
     for key in panel_keys:
         t.check(f"面板键 {key} 已入英文目录", key in en_admin, sorted(en_admin)[:6])
-    t.eq("面板键在全部 18 语种都有译文",
+    t.eq("面板键在全部 21 语种都有译文",
          [f"{loc}/{key}" for key in panel_keys for loc in LOCALES
           if not str(CATALOGS["admin"][loc].get(key, "")).strip()], [])
     t.eq("面板键都在页面上被用到", [key for key in panel_keys if f'data-i18n="{key}"' not in page_html], [])

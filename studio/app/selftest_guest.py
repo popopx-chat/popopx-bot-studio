@@ -19,7 +19,7 @@
 * 没确认就不给 .ics；给了就是合法 RFC 5545（CRLF、75 octet 折行、UTC 时间戳）且不含
   ORGANIZER/ATTENDEE；
 * 页面零外链、零脚本、零 Cookie、零原始令牌，CSP 用 ``sha256`` 钉住样式而不是
-  ``'unsafe-inline'``，18 语种占位符完全一致。
+  ``'unsafe-inline'``，21 语种占位符完全一致。
 """
 
 from __future__ import annotations
@@ -1085,13 +1085,31 @@ def _page(t: SelfTest, h: Harness) -> None:
         t.check(f"{locale} 可渲染", rendered.startswith("<!doctype html>") and f'lang="{locale}' in rendered, rendered[:60])
         t.check(f"{locale} 无 unsafe-inline", "unsafe-inline" not in rendered, rendered[:60])
         t.check(f"{locale} 无原始令牌", issued["token"] not in rendered, issued["token"][:24])
-    t.eq("语种数量", len(LOCALES), 18)
+    t.eq("语种数量", len(LOCALES), 21)
     t.eq("未知语种回退", render_page(view, locale="qq-ZZ")[:200].count('lang="en"'), 1)
+    arabic = render_page(view, locale="ar")
+    t.contains("阿拉伯语页根节点 RTL", arabic, '<html lang="ar" dir="rtl">')
+    t.contains("阿拉伯语选项用本地标签", arabic, ">العربية</option>")
+    t.contains("气泡按书写方向渲染", arabic, "unicode-bidi:plaintext")
+    t.contains("气泡边框走逻辑属性", arabic, "border-inline-start")
+    for locale in ("en", "ja", "zh-Hant", "pt-BR"):
+        t.contains(f"{locale} 页根节点 LTR", render_page(view, locale=locale), 'dir="ltr">')
+    t.contains("ar-EG 收敛到 ar 且 RTL", render_page(view, locale="ar-EG"), '<html lang="ar" dir="rtl">')
+    t.contains("pt 收敛到 pt-BR", render_page(view, locale="pt"), '<html lang="pt-BR" dir="ltr">')
 
     for locale in LOCALES:
         problems = page_parity(locale)
         t.eq(f"{locale} 文案与 en 完全对齐", problems, [])
     t.eq("文案键数", len(PAGE_KEYS), len(PAGE_STRINGS["en"]))
+    hangul = re.compile(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]")
+    arabic = re.compile(r"[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff\ufb50-\ufdff\ufe70-\ufeff]")
+    t.eq("韩文页面文案全部含谚文",
+         [k for k, v in PAGE_STRINGS["ko"].items() if not hangul.search(v)], [])
+    t.eq("阿拉伯语页面文案全部含阿拉伯字母",
+         [k for k, v in PAGE_STRINGS["ar"].items() if not arabic.search(v)], [])
+    for loc in ("ko", "ar", "pt-BR"):
+        t.eq(f"{loc} 页面没有照抄英文",
+             [k for k, v in PAGE_STRINGS[loc].items() if v == PAGE_STRINGS["en"][k]], [])
     t.check("每个语种的 promise 不含邮箱", all("@" not in PAGE_STRINGS[loc]["promise"] for loc in LOCALES), "")
     t.check("每个语种都写明无需账号", all(PAGE_STRINGS[loc]["promise"] for loc in LOCALES), "")
     t.check("每个语种的 brand 带 POPOPX", all("POPOPX" in PAGE_STRINGS[loc]["brand"] for loc in LOCALES), "")

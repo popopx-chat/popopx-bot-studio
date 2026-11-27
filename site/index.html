@@ -23,7 +23,7 @@ h1,h2,h3,p,dl,dd,figure{margin:0}
 a{color:inherit;text-decoration:none}
 :focus-visible{outline:2px solid var(--acc);outline-offset:3px}
 ::selection{background:var(--acc-d);color:#04070a}
-.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums;unicode-bidi:isolate}
 .wrap{max-width:1180px;margin:0 auto;padding:0 clamp(18px,4vw,44px)}
 .rule{height:9px;border-bottom:1px solid var(--line);
   background-image:repeating-linear-gradient(90deg,var(--line) 0 1px,transparent 1px 22px)}
@@ -32,7 +32,7 @@ header.top{position:sticky;top:0;z-index:30;background:rgba(4,6,10,.92);border-b
 .brand{display:flex;align-items:baseline;gap:10px}
 .b1{font:700 13px/1 var(--mono);letter-spacing:.26em;text-transform:uppercase}
 .b2{font-size:12px;color:var(--dim)}
-nav.links{display:flex;gap:clamp(12px,2vw,26px);margin-left:auto;font:11px/1 var(--mono);
+nav.links{display:flex;gap:clamp(12px,2vw,26px);margin-inline-start:auto;font:11px/1 var(--mono);
   letter-spacing:.15em;text-transform:uppercase;color:var(--mut)}
 nav.links a:hover{color:var(--acc)}
 .lang{display:flex;align-items:center;gap:8px}
@@ -41,6 +41,7 @@ select{background:#080c12;color:var(--txt);border:1px solid var(--line2);padding
   appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--mut) 50%),linear-gradient(135deg,var(--mut) 50%,transparent 50%);
   background-position:calc(100% - 14px) 13px,calc(100% - 9px) 13px;background-size:5px 5px;background-repeat:no-repeat;
   max-width:min(210px,44vw);text-overflow:ellipsis}
+[dir="rtl"] select{padding:7px 9px 7px 26px;background-position:calc(0% + 9px) 13px,calc(0% + 14px) 13px}
 select:focus{border-color:var(--acc-d);outline:none;box-shadow:0 0 0 1px rgba(37,232,198,.3)}
 .cta{display:inline-flex;align-items:center;gap:9px;padding:13px 20px;border:1px solid var(--acc-d);
   background:rgba(37,232,198,.1);color:var(--acc);font:600 13px/1 var(--sans);letter-spacing:.04em}
@@ -56,15 +57,15 @@ h1.big{font-size:clamp(2.35rem,6.4vw,4.6rem);line-height:1.03;letter-spacing:-.0
 .sub{font-size:clamp(1rem,1.35vw + .6rem,1.3rem);line-height:1.6;color:var(--mut);max-width:62ch;margin-top:26px}
 .actions{display:flex;gap:14px;flex-wrap:wrap;margin-top:38px}
 .specs{display:flex;flex-wrap:wrap;gap:0;margin-top:clamp(40px,6vw,70px);border-top:1px solid var(--line)}
-.spec{padding:15px 22px 15px 0;border-right:1px solid var(--line);margin-right:22px}
-.spec:last-child{border-right:0}
+.spec{padding-block:15px;padding-inline:0 22px;border-inline-end:1px solid var(--line);margin-inline-end:22px}
+.spec:last-child{border-inline-end:0}
 .spec .k{font:10px/1.6 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--dim)}
-.spec .v{font:13px/1.5 var(--mono);color:var(--txt);overflow-wrap:anywhere}
+.spec .v{font:13px/1.5 var(--mono);color:var(--txt);overflow-wrap:anywhere;direction:ltr;unicode-bidi:isolate}
 section{padding:clamp(52px,8vw,110px) 0}
 .sh{display:flex;align-items:flex-end;gap:18px;margin-bottom:clamp(30px,4vw,54px);
   padding-bottom:14px;border-bottom:1px solid var(--line)}
 .sh h2{font:600 clamp(1.1rem,1.6vw + .5rem,1.5rem)/1.2 var(--sans);letter-spacing:-.01em}
-.sh .id{margin-left:auto;font:11px/1 var(--mono);letter-spacing:.2em;color:var(--dim)}
+.sh .id{margin-inline-start:auto;font:11px/1 var(--mono);letter-spacing:.2em;color:var(--dim)}
 .frow{display:grid;grid-template-columns:clamp(70px,9vw,124px) minmax(0,1fr) minmax(0,.9fr);
   gap:clamp(16px,3vw,44px);align-items:start;padding:clamp(26px,4vw,44px) 0;border-bottom:1px solid var(--line)}
 .frow:last-of-type{border-bottom:0}
@@ -72,29 +73,30 @@ section{padding:clamp(52px,8vw,110px) 0}
 .frow h3{font-size:clamp(1.25rem,1.5vw + .55rem,1.9rem);line-height:1.18;letter-spacing:-.02em;margin-bottom:14px}
 .frow p{color:var(--mut);max-width:56ch}
 .ftag{display:flex;flex-direction:column;gap:9px;font:12px/1.4 var(--mono);color:var(--dim)}
-.ftag span{border:1px solid var(--line);padding:8px 11px;background:var(--panel);overflow-wrap:anywhere}
+.ftag span{border:1px solid var(--line);padding:8px 11px;background:var(--panel);overflow-wrap:anywhere;direction:ltr;unicode-bidi:isolate}
 .ftag b{color:var(--acc);font-weight:400}
 .tut{display:grid;grid-template-columns:minmax(0,300px) minmax(0,1fr);gap:clamp(20px,4vw,52px);align-items:start}
 .tabs{display:flex;flex-direction:column;gap:0;border-top:1px solid var(--line)}
-.tabs button{display:grid;grid-template-columns:auto minmax(0,1fr);gap:14px;align-items:baseline;text-align:left;
-  padding:17px 14px 17px 0;background:none;border:0;border-bottom:1px solid var(--line);color:var(--mut);
-  font:15px/1.45 var(--sans);cursor:pointer;transition:color .15s,padding-left .15s}
+.tabs button{display:grid;grid-template-columns:auto minmax(0,1fr);gap:14px;align-items:baseline;text-align:start;
+  padding-block:17px;padding-inline:0 14px;background:none;border:0;border-bottom:1px solid var(--line);color:var(--mut);
+  font:15px/1.45 var(--sans);cursor:pointer;transition:color .15s,padding-inline-start .15s}
 .tabs button .n{font:11px/1 var(--mono);letter-spacing:.16em;color:var(--dim)}
 .tabs button:hover{color:var(--txt)}
-.tabs button[aria-selected="true"]{color:var(--acc);padding-left:12px}
+.tabs button[aria-selected="true"]{color:var(--acc);padding-inline-start:12px}
 .tabs button[aria-selected="true"] .n{color:var(--acc)}
 .tabs button[aria-selected="true"]{box-shadow:inset 2px 0 0 var(--acc)}
+[dir="rtl"] .tabs button[aria-selected="true"]{box-shadow:inset -2px 0 0 var(--acc)}
 .prog{display:flex;align-items:center;gap:13px;margin-bottom:22px}
 .prog .track{flex:1;height:2px;background:var(--line)}
 .prog .fill{height:2px;background:var(--acc);transition:width .22s}
 .prog .cnt{font:11px/1 var(--mono);letter-spacing:.16em;color:var(--dim)}
-.panel{border:1px solid var(--line);background:var(--panel);padding:clamp(20px,3vw,34px)}
-.panel .step-id{font:11px/1.5 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--acc);margin-bottom:20px}
+.panel{border:1px solid var(--line);background:var(--panel);padding:clamp(20px,3vw,34px);min-width:0}
+.panel .step-id{font:11px/1.5 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--acc);margin-bottom:20px;direction:ltr;unicode-bidi:isolate}
 .code{margin-top:0;border:1px solid var(--line);background:#06090e;overflow-x:auto}
 .code .hd{display:flex;gap:10px;padding:9px 14px;border-bottom:1px solid var(--line);
   font:10px/1.6 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
-.code .hd b{margin-left:auto;color:var(--mut);font-weight:400}
-.code pre{margin:0;padding:15px;font:12.5px/1.75 var(--mono);color:#a9c2d4;white-space:pre;tab-size:2}
+.code .hd b{margin-inline-start:auto;color:var(--mut);font-weight:400}
+.code pre{margin:0;padding:15px;font:12.5px/1.75 var(--mono);color:#a9c2d4;white-space:pre;tab-size:2;direction:ltr;unicode-bidi:isolate}
 .code .t{color:var(--acc)}
 .code .k{color:var(--warn)}
 .code .c{color:var(--dim)}
@@ -102,7 +104,7 @@ section{padding:clamp(52px,8vw,110px) 0}
 .api div{background:var(--bg);padding:17px 19px}
 .api .m{font:10px/1.7 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--acc)}
 .api .m.g{color:var(--warn)}
-.api .p{font:12.5px/1.6 var(--mono);color:var(--txt);overflow-wrap:anywhere}
+.api .p{font:12.5px/1.6 var(--mono);color:var(--txt);overflow-wrap:anywhere;direction:ltr;unicode-bidi:isolate}
 .api .d{font-size:12.5px;color:var(--dim);margin-top:6px}
 footer{border-top:1px solid var(--line);padding:clamp(34px,5vw,64px) 0 44px;background:var(--bg2)}
 .fgrid{display:flex;gap:clamp(18px,4vw,50px);flex-wrap:wrap;align-items:flex-start}
@@ -112,11 +114,12 @@ footer{border-top:1px solid var(--line);padding:clamp(34px,5vw,64px) 0 44px;back
 .copy{margin-top:30px;padding-top:18px;border-top:1px solid var(--line);
   font:12px/1.7 var(--mono);letter-spacing:.04em;color:var(--mut)}
 @media(max-width:900px){
-  .tut{grid-template-columns:1fr}
+  .tut{grid-template-columns:minmax(0,1fr)}
+  .tut>*{min-width:0}
   .frow{grid-template-columns:minmax(0,1fr);gap:14px}
   .fidx{font-size:2.2rem}
-  nav.links{order:3;width:100%;margin-left:0;padding-bottom:12px;overflow-x:auto}}
-@media(max-width:600px){.specs{gap:0}.spec{border-right:0;padding-right:0;margin-right:0;width:100%;border-bottom:1px solid var(--line)}}
+  nav.links{order:3;width:100%;margin-inline-start:0;padding-bottom:12px;overflow-x:auto}}
+@media(max-width:600px){.specs{gap:0}.spec{border-inline-end:0;padding-inline-end:0;margin-inline-end:0;width:100%;border-bottom:1px solid var(--line)}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
 </style>
 </head>
@@ -226,7 +229,7 @@ footer{border-top:1px solid var(--line);padding:clamp(34px,5vw,64px) 0 44px;back
         <p class="step-id mono">GET /healthz · studio/app/main.py · requirements.txt</p>
         <figure class="code">
           <figcaption class="hd">sh<b>127.0.0.1</b></figcaption>
-          <pre><span class="t">$</span> pip install -r studio/requirements.txt   <span class="c"># python 3.11</span>
+          <pre dir="ltr"><span class="t">$</span> pip install -r studio/requirements.txt   <span class="c"># python 3.11</span>
 <span class="t">$</span> cd studio && python3 -m app.main --port 8090
 <span class="t">$</span> curl -s http://127.0.0.1:8090/healthz
 <span class="k">{ "ok": true, "app": "popopx-bot-studio", "version": "1.0.0", "loopback_only": true }</span></pre>
@@ -237,7 +240,7 @@ footer{border-top:1px solid var(--line);padding:clamp(34px,5vw,64px) 0 44px;back
         <p class="step-id mono">POST /api/admin/bots · X-Studio-Token</p>
         <figure class="code">
           <figcaption class="hd">json<b>accept_incognito: false</b></figcaption>
-          <pre><span class="t">POST</span> /api/admin/bots
+          <pre dir="ltr"><span class="t">POST</span> /api/admin/bots
 { "name": "support", "default_locale": "zh-Hans",
   "auto_accept": true, "accept_incognito": <span class="k">false</span> }
 
@@ -254,7 +257,7 @@ footer{border-top:1px solid var(--line);padding:clamp(34px,5vw,64px) 0 44px;back
         <p class="step-id mono">rules · routing · preview</p>
         <figure class="code">
           <figcaption class="hd">preview<b>matched_rules[]</b></figcaption>
-          <pre><span class="t">POST</span> /api/admin/bots/b1/rules
+          <pre dir="ltr"><span class="t">POST</span> /api/admin/bots/b1/rules
 { "trigger_type": "prefix", "pattern": "/help",
   "reply_text": "…", "cooldown_seconds": 60 }
 
@@ -271,7 +274,7 @@ footer{border-top:1px solid var(--line);padding:clamp(34px,5vw,64px) 0 44px;back
         <p class="step-id mono">/api/v1 · PATCH /api/admin/plugins</p>
         <figure class="code">
           <figcaption class="hd">curl<b>Authorization: Bearer</b></figcaption>
-          <pre><span class="t">$</span> curl -sS http://127.0.0.1:8090/api/v1/sendMessage \
+          <pre dir="ltr"><span class="t">$</span> curl -sS http://127.0.0.1:8090/api/v1/sendMessage \
     -H 'Authorization: Bearer $BOT_TOKEN' \
     -d '{"chat_ref":"#1234567890","text":"hello"}'
 
@@ -321,17 +324,17 @@ footer{border-top:1px solid var(--line);padding:clamp(34px,5vw,64px) 0 44px;back
 
   /* ========================================================== i18n engine */
   var LS_LOC = "popopx.locale", NAME = "site";
-  /* The 18 codes are the detection floor: the switcher and normalize() must work
+  /* The 21 codes are the detection floor: the switcher and normalize() must work
      before the catalog is spliced or fetched. Translations still come from CAT only. */
-  var CAT = { fallback: "en", locales: ["en", "zh-Hans", "zh-Hant", "ja", "bg", "cs", "de", "es", "fi", "fr", "hu", "it", "nl", "pl", "ru", "th", "tr", "uk"],
-            labels: { en: "English" }, admin: {}, site: {}, welcome: {} };
+  var CAT = { fallback: "en", locales: ["en", "zh-Hans", "zh-Hant", "ja", "ar", "bg", "cs", "de", "es", "fi", "fr", "hu", "it", "ko", "nl", "pl", "pt-BR", "ru", "th", "tr", "uk"],
+            rtl: ["ar"], labels: { en: "English" }, admin: {}, site: {}, welcome: {} };
   var cur = "en";
-  /* zh variants are the only tags that need mapping; anything else unknown stays
-     unsupported so detect() can keep walking the candidate list. */
+  /* zh variants need an explicit mapping; pt collapses to the only Portuguese
+     catalog; anything else unknown stays unsupported so detect() keeps walking. */
   var ALIAS = {
     zh: "zh-Hans", "zh-cn": "zh-Hans", "zh-sg": "zh-Hans", "zh-hans": "zh-Hans", "zh-hans-cn": "zh-Hans",
     "zh-tw": "zh-Hant", "zh-hk": "zh-Hant", "zh-mo": "zh-Hant", "zh-hant": "zh-Hant",
-    "zh-hant-tw": "zh-Hant", "zh-hant-hk": "zh-Hant"
+    "zh-hant-tw": "zh-Hant", "zh-hant-hk": "zh-Hant", pt: "pt-BR"
   };
 
   function table() {
@@ -425,10 +428,17 @@ footer{border-top:1px solid var(--line);padding:clamp(34px,5vw,64px) 0 44px;back
     return sel;
   }
 
+  function applyDir() {
+    var list = CAT.rtl || [], isRtl = false;
+    for (var i = 0; i < list.length; i++) if (list[i] === cur) isRtl = true;
+    document.documentElement.setAttribute("dir", isRtl ? "rtl" : "ltr");
+  }
+
   function set(locale) {
     cur = normalize(locale) || CAT.fallback || "en";
     try { localStorage.setItem(LS_LOC, cur); } catch (e) { /* private mode */ }
     document.documentElement.lang = cur;
+    applyDir();
     var sel = document.getElementById("lang");
     if (sel && sel.value !== cur) sel.value = cur;
     apply();
@@ -439,7 +449,7 @@ footer{border-top:1px solid var(--line);padding:clamp(34px,5vw,64px) 0 44px;back
     if (!node) return;
     try {
       var parsed = JSON.parse(node.textContent);
-      if (parsed && parsed.locales && parsed.locales.length) CAT = parsed;
+      if (parsed && parsed.locales && parsed.locales.length) { CAT = parsed; applyDir(); }
     } catch (e) { /* marker not spliced yet */ }
   }
 
@@ -490,6 +500,7 @@ footer{border-top:1px solid var(--line);padding:clamp(34px,5vw,64px) 0 44px;back
     loadEmbedded();
     cur = normalize(detect()) || CAT.fallback || "en";   /* boot never persists: only set() does */
     document.documentElement.lang = cur;
+    applyDir();
     var sel = fillSelect(document.getElementById("lang"), cur);
     sel.addEventListener("change", function () { set(this.value); });
     apply();

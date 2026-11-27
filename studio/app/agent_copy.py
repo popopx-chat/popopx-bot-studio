@@ -1,4 +1,4 @@
-"""替身机器人话术模板（18 语种）——大模型缺席时的确定性文案。
+"""替身机器人话术模板（21 语种）——大模型缺席时的确定性文案。
 
 双引擎架构里小模型（Needle 3）只抽取意图，大模型（Reasoner）只写人话。但大模型可
 能被关掉、被限流、超时、返回非 200，甚至根本没配 —— 那时主人收到的不能是空字符串，
@@ -8,7 +8,7 @@
   该语种的自然语言（``render`` 永远返回非空字符串，永远不抛）；
 * 给后台与自检一份可校验的契约：``KINDS`` 是话术种类，``PLACEHOLDERS`` 是每种的占位符
   集合，``missing_keys`` / ``extra_keys`` / ``placeholder_drift`` / ``assert_catalog``
-  把 18 语种的对齐状态变成断言 —— 与 :mod:`app.i18n` 同一套纪律，只是这里的单位是
+  把 21 语种的对齐状态变成断言 —— 与 :mod:`app.i18n` 同一套纪律，只是这里的单位是
   「一句话术」而不是「一个界面词条」。
 
 占位符约定沿用 :data:`app.i18n._PLACEHOLDER_RE`（``{lower_snake}``）：译文里少了占位符
@@ -53,11 +53,15 @@ _TOKEN_RE = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 # 事故，占位符对齐检查是发现不了的。这里按语种列出「允许出现的非拉丁文字族」。
 _HAN = re.compile(r"[㐀-䶿一-鿿]")
 _KANA = re.compile(r"[぀-ヿ]")
+_HANGUL = re.compile(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]")
+_ARABIC = re.compile(r"[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff\ufb50-\ufdff\ufe70-\ufeff]")
 _THAI = re.compile(r"[฀-๿]")
 _CYRILLIC = re.compile(r"[Ѐ-ӿ]")
 _SCRIPT_FAMILIES: Dict[str, str] = {
     "han": "中日韩汉字",
     "kana": "日文假名",
+    "hangul": "韩文谚文",
+    "arabic": "阿拉伯文",
     "thai": "泰文",
     "cyrillic": "西里尔字母",
 }
@@ -65,6 +69,8 @@ _SCRIPT_ALLOWED: Dict[str, Tuple[str, ...]] = {
     "zh-Hans": ("han",),
     "zh-Hant": ("han",),
     "ja": ("han", "kana"),
+    "ko": ("hangul",),
+    "ar": ("arabic",),
     "th": ("thai",),
     "ru": ("cyrillic",),
     "bg": ("cyrillic",),
@@ -73,6 +79,8 @@ _SCRIPT_ALLOWED: Dict[str, Tuple[str, ...]] = {
 _SCRIPT_TESTS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
     ("han", _HAN),
     ("kana", _KANA),
+    ("hangul", _HANGUL),
+    ("arabic", _ARABIC),
     ("thai", _THAI),
     ("cyrillic", _CYRILLIC),
 )
@@ -84,7 +92,7 @@ def foreign_scripts(locale: str, text: str) -> List[str]:
     found = [name for name, pattern in _SCRIPT_TESTS if name not in allowed and pattern.search(text or "")]
     return found
 
-# 基准语种的话术：其余 17 语种必须与这一份的键集与占位符集合完全一致。
+# 基准语种的话术：其余 20 语种必须与这一份的键集与占位符集合完全一致。
 CATALOG: Dict[str, Dict[str, str]] = {}
 
 CATALOG["en"] = {
@@ -177,6 +185,21 @@ CATALOG["ja"] = {
     "negotiation_converged": "{peer} と {start}（{duration} 分）で合意しました。招待をお送りします。",
     "negotiation_failed": "{peer} と都合の合う枠が見つかりませんでした：{reason}。別の時間を提案しましょうか？",
     "proposal_expired": "{start} の「{title}」は確認期限までに承認されなかったため、カレンダーは変更していません。",
+}
+
+CATALOG["ar"] = {
+    "availability_answer": "مرحبًا {sender} — لدي {duration} دقيقة متاحة في: {options}. المنطقة الزمنية: {timezone}. أي وقت يناسبك؟",
+    "availability_none": "عذرًا {sender}، لا يوجد وقت متاح في تقويمي خلال {window}. هل يمكننا توسيع النطاق أو اختيار يوم آخر؟",
+    "create_confirm": "تم التأكيد: {title} من {start} إلى {end} ({timezone}). أُضيف إلى التقويم الآن.",
+    "reschedule_confirm": "تم النقل: يبدأ {title} الآن في {to} (كان {from})، المنطقة الزمنية {timezone}.",
+    "proposal_pending": "المقترح جاهز: {title} من {start} إلى {end} ({timezone}). بانتظار تأكيد المالك؛ لم يُكتب شيء في التقويم بعد.",
+    "cancel_confirm": "تم الإلغاء: {title} في {start} ({timezone}) لم يعد يشغل يومك.",
+    "meeting_summary": "ملخص {file_name}: {headline} المهام المتابعة: {actions}",
+    "guest_received": "شكرًا {host} — تم استلام طلبك. الوقت المقترح: {start} ({timezone}). ستصلك دعوة تقويم بعد التأكيد.",
+    "guest_booked": "تم الحجز مع {host}: {start} ({timezone}). رمز الرابط الخاص بك هو {code}.",
+    "negotiation_converged": "اتفقت أنا و{peer} على {start} لمدة {duration} دقيقة. أرسل الدعوة الآن.",
+    "negotiation_failed": "لم أجد وقتًا يناسب {peer}: {reason}. هل أقترح وقتًا آخر؟",
+    "proposal_expired": "{title} في {start} لم يُؤكد في الوقت المحدد، لذلك لم يُكتب شيء في التقويم.",
 }
 
 CATALOG["bg"] = {
@@ -373,6 +396,21 @@ CATALOG["it"] = {
     "proposal_expired": "{title} del {start} non è stato confermato in tempo, il calendario è rimasto invariato.",
 }
 
+CATALOG["ko"] = {
+    "availability_answer": "{sender}님, {duration}분 동안 가능한 시간은 {options}입니다. 시간대: {timezone}. 어느 시간이 좋으신가요?",
+    "availability_none": "{sender}님, 죄송합니다. {window} 안에 일정이 없습니다. 범위를 넓히거나 다른 날짜로 잡을까요?",
+    "create_confirm": "확정되었습니다: {title}, {start}부터 {end}까지({timezone}). 캘린더에 등록했습니다.",
+    "reschedule_confirm": "변경되었습니다: {title}이 {from}에서 {to}로 이동했습니다. 시간대는 {timezone}입니다.",
+    "proposal_pending": "제안이 준비되었습니다: {title}, {start}부터 {end}까지({timezone}). 소유자가 확인하기 전까지 캘린더에는 기록되지 않습니다.",
+    "cancel_confirm": "취소되었습니다: {start}의 {title}({timezone})이 더 이상 일정을 차지하지 않습니다.",
+    "meeting_summary": "{file_name} 요약: {headline} 후속 작업: {actions}",
+    "guest_received": "{host}님, 요청이 접수되었습니다. 제안 시간: {start}({timezone}). 확정되면 캘린더 초대를 보내 드립니다.",
+    "guest_booked": "{host}님과 예약되었습니다: {start}({timezone}). 링크 코드는 {code}입니다.",
+    "negotiation_converged": "{peer}님과 {start}에 {duration}분으로 합의했습니다. 지금 초대를 보냅니다.",
+    "negotiation_failed": "{peer}님과 맞는 시간을 찾지 못했습니다: {reason}. 다른 시간을 제안할까요?",
+    "proposal_expired": "{start}의 {title}이(가) 제때 확인되지 않아 캘린더에는 아무것도 기록되지 않았습니다.",
+}
+
 CATALOG["nl"] = {
     "availability_answer": (
         "Bedankt {sender} — ik heb {duration} minuten vrij op deze momenten: {options}. "
@@ -419,6 +457,21 @@ CATALOG["pl"] = {
     "negotiation_converged": "Z {peer} ustaliliśmy {start} na {duration} minut. Wysyłam zaproszenie.",
     "negotiation_failed": "Nie znalazłem wspólnego terminu z {peer}: {reason}. Proponować inną godzinę?",
     "proposal_expired": "{title} {start} nie zostało potwierdzone na czas, więc w kalendarzu nic nie zapisałem.",
+}
+
+CATALOG["pt-BR"] = {
+    "availability_answer": "Olá {sender} — tenho {duration} minutos livres em: {options}. Fuso horário: {timezone}. Qual horário funciona para você?",
+    "availability_none": "Desculpe, {sender}, minha agenda não tem horário livre dentro de {window}. Podemos ampliar a janela ou escolher outro dia?",
+    "create_confirm": "Confirmado: {title}, de {start} a {end} ({timezone}). Já está na agenda.",
+    "reschedule_confirm": "Remarcado: {title} agora começa em {to} (antes era {from}), fuso horário {timezone}.",
+    "proposal_pending": "Proposta pronta: {title}, de {start} a {end} ({timezone}). Aguardando a confirmação do proprietário; nada foi gravado na agenda ainda.",
+    "cancel_confirm": "Cancelado: {title} em {start} ({timezone}) não bloqueia mais o seu dia.",
+    "meeting_summary": "Resumo de {file_name}: {headline} Próximas ações: {actions}",
+    "guest_received": "Obrigado, {host} — seu pedido foi recebido. Horário proposto: {start} ({timezone}). Você receberá um convite de agenda após a confirmação.",
+    "guest_booked": "Agendado com {host}: {start} ({timezone}). O código do seu link é {code}.",
+    "negotiation_converged": "{peer} e eu chegamos a um acordo em {start}, por {duration} minutos. Enviando o convite agora.",
+    "negotiation_failed": "Não encontrei um horário que funcione com {peer}: {reason}. Quer que eu proponha outro horário?",
+    "proposal_expired": "{title} em {start} não foi confirmado a tempo, então nada foi gravado na agenda.",
 }
 
 CATALOG["ru"] = {
@@ -636,8 +689,8 @@ def parity_report() -> Dict[str, Dict[str, Any]]:
 def assert_catalog() -> List[str]:
     """Human-readable violations; an empty list is the parity gate."""
     problems: List[str] = []
-    if len(LOCALES) != 18:
-        problems.append(f"LOCALES 应为 18 个，当前 {len(LOCALES)}")
+    if len(LOCALES) != 21:
+        problems.append(f"LOCALES 应为 21 个，当前 {len(LOCALES)}")
     base_kinds = set(CATALOG[FALLBACK_LOCALE])
     if base_kinds != set(KINDS):
         problems.append(f"KINDS 与 en 目录键集不一致：{sorted(base_kinds ^ set(KINDS))}")

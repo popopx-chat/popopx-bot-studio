@@ -30,7 +30,7 @@
 * **收紧而非放宽**：预算取 ``min(令牌 mus, 库里 max_uses)``，时长同理 —— 事后把库里的次数
   改大不能让已用完的单次令牌复活，管理员收紧也立刻生效。
 * **撤销即时生效**：撤销只看库里的 ``status``，每次校验都重读，不缓存任何授权结论。
-* **对外可见性**：页面文案 18 语种齐全且占位符完全一致；访客输入一律 HTML 转义；页面不含
+* **对外可见性**：页面文案 21 语种齐全且占位符完全一致，``ar`` 整页 ``dir="rtl"``；访客输入一律 HTML 转义；页面不含
   任何外链、不含 ``<script>``、不含原始令牌（表单 ``action=""`` 即回到当前 URL）。
 
 本模块不联网、不 spawn 进程，也不 import A2A / Mac Node / Needle 运行时 —— 空档来源、
@@ -67,7 +67,14 @@ from . import ics
 from .config import DEFAULT_HOST, Settings, is_loopback_http_url
 from .database import Database, LedgerError, new_guest_link_id
 from .eco_cards import EcoCardError, EcoLimits, confirmation_card
-from .i18n import FALLBACK_LOCALE, LOCALES, LOCALE_LABELS, normalize_locale, parse_accept_language
+from .i18n import (
+    FALLBACK_LOCALE,
+    LOCALES,
+    LOCALE_LABELS,
+    is_rtl,
+    normalize_locale,
+    parse_accept_language,
+)
 
 # --------------------------------------------------------------------- 公共常量
 
@@ -916,6 +923,31 @@ PAGE_STRINGS: Dict[str, Dict[str, str]] = {
         "c_no": "お断り",
         "c_alt": "別の日時",
     },
+    "ar": {
+        "title": "حجز اجتماع",
+        "brand": "حجز POPOPX",
+        "tagline": "اكتب فقط الوقت الذي يناسبك. بلا حساب، بلا تثبيت، بلا رسوم.",
+        "promise": "بلا حساب · بلا تثبيت · بلا رسوم",
+        "steps": "1 أخبرنا بوقتك · 2 يؤكد المالك · 3 نزّل دعوة التقويم",
+        "expires": "يعمل هذا الرابط حتى {expires}",
+        "ask_label": "متى تود الاجتماع؟",
+        "ask_placeholder": "مثال: الأربعاء القادم بعد الساعة 15:00",
+        "send": "أرسل إلى المساعد",
+        "ready": "تم التأكيد: {title}",
+        "ics_button": "نزّل دعوة تقويم {format}",
+        "error": "رابط الحجز هذا غير متاح: {reason}",
+        "lang_label": "لغة الواجهة",
+        "privacy": "يرى الطرف الآخر تفضيل الوقت فقط، ولا يرى بيانات الاتصال الخاصة بك أبدًا.",
+        "r_unavailable": "لا أستطيع التحقق من أوقات المالك المتاحة الآن، لذا أسجل تفضيلك فقط ولا أختلق وقتًا. حاول مرة أخرى بعد قليل.",
+        "r_slots": "الأوقات المتاحة (الفجوات فقط، دون أحداث أخرى): {list} أرسل رقم الخيار الذي تفضله.",
+        "r_proposed": "أرسلت {slot} إلى المالك للتأكيد. بعد الموافقة ستصلك دعوة {format} هنا.",
+        "c_title": "طلب اجتماع من رابط زائر",
+        "c_body": "{topic} · {slot} · {duration} دقيقة · هوية الزائر مقنّعة",
+        "c_call": "مكالمة في POPOPX Chat (بلا حساب إضافي)",
+        "c_yes": "تأكيد",
+        "c_no": "رفض",
+        "c_alt": "وقت آخر",
+    },
     "bg": {
         "title": "Запазване на среща",
         "brand": "POPOPX Запазване",
@@ -1131,6 +1163,31 @@ PAGE_STRINGS: Dict[str, Dict[str, str]] = {
         "c_no": "Rifiuta",
         "c_alt": "Altro orario",
     },
+    "ko": {
+        "title": "회의 예약",
+        "brand": "POPOPX 예약",
+        "tagline": "편한 시간을 적기만 하세요. 계정도, 설치도, 비용도 없습니다.",
+        "promise": "계정 없음 · 설치 없음 · 비용 없음",
+        "steps": "1 시간 알려주기 · 2 소유자 확인 · 3 캘린더 초대 내려받기",
+        "expires": "이 링크는 {expires}까지 유효합니다",
+        "ask_label": "언제 만나고 싶으신가요?",
+        "ask_placeholder": "예: 다음 주 수요일 15:00 이후",
+        "send": "도우미에게 보내기",
+        "ready": "확정됨: {title}",
+        "ics_button": "{format} 캘린더 초대 내려받기",
+        "error": "이 예약 링크를 사용할 수 없습니다: {reason}",
+        "lang_label": "인터페이스 언어",
+        "privacy": "상대방은 시간 선호만 보고, 연락처 정보는 절대 보지 못합니다.",
+        "r_unavailable": "지금은 소유자의 빈 시간을 확인할 수 없어 시간 선호만 기록하며, 시간을 임의로 만들지 않습니다. 잠시 후 다시 시도해 주세요.",
+        "r_slots": "빈 시간(다른 일정은 제외한 틈만 표시): {list} 원하는 번호로 답장하세요.",
+        "r_proposed": "{slot}을(를) 소유자에게 확인 요청으로 보냈습니다. 승인되면 이곳에서 {format} 초대를 받습니다.",
+        "c_title": "방문자 링크의 회의 요청",
+        "c_body": "{topic} · {slot} · {duration}분 · 방문자 신원 비식별",
+        "c_call": "POPOPX Chat에서 통화(추가 계정 불필요)",
+        "c_yes": "확인",
+        "c_no": "거절",
+        "c_alt": "다른 시간",
+    },
     "nl": {
         "title": "Afspraak boeken",
         "brand": "POPOPX Boeking",
@@ -1184,6 +1241,31 @@ PAGE_STRINGS: Dict[str, Dict[str, str]] = {
         "c_yes": "Potwierdź",
         "c_no": "Odrzuć",
         "c_alt": "Inny termin",
+    },
+    "pt-BR": {
+        "title": "Agendar uma reunião",
+        "brand": "POPOPX Agendamento",
+        "tagline": "Basta escrever o horário que funciona para você. Sem conta, sem instalação, sem taxa.",
+        "promise": "Sem conta · Sem instalação · Sem taxa",
+        "steps": "1 Informe seu horário · 2 O proprietário confirma · 3 Baixe o convite de agenda",
+        "expires": "Este link funciona até {expires}",
+        "ask_label": "Quando você gostaria de se encontrar?",
+        "ask_placeholder": "Por exemplo: próxima quarta após as 15:00",
+        "send": "Enviar ao assistente",
+        "ready": "Confirmado: {title}",
+        "ics_button": "Baixar o convite de agenda {format}",
+        "error": "Este link de agendamento não está disponível: {reason}",
+        "lang_label": "Idioma da interface",
+        "privacy": "A outra parte vê apenas sua preferência de horário, nunca seus dados de contato.",
+        "r_unavailable": "Não consigo consultar os horários livres do proprietário agora, então apenas anoto sua preferência e não invento um horário. Tente novamente em instantes.",
+        "r_slots": "Horários livres (apenas as lacunas, sem outros eventos): {list} Responda com o número que preferir.",
+        "r_proposed": "Enviei {slot} ao proprietário para confirmação. Assim que for aprovado, você recebe um convite {format} aqui mesmo.",
+        "c_title": "Pedido de reunião de um link de visitante",
+        "c_body": "{topic} · {slot} · {duration} min · identidade do visitante mascarada",
+        "c_call": "chamada no POPOPX Chat (sem conta adicional)",
+        "c_yes": "Confirmar",
+        "c_no": "Recusar",
+        "c_alt": "Outro horário",
     },
     "ru": {
         "title": "Записаться на встречу",
@@ -1345,10 +1427,10 @@ h2{margin:0 0 .35rem;font-size:1.05rem}
 .card.error{border-color:#5b2130;background:#1a1015;color:#ffd7de}
 .steps{margin:.6rem 0 0;padding:0;color:var(--dim);font-size:.85rem}
 ol.thread{list-style:none;margin:0 0 1rem;padding:0;display:grid;gap:.55rem}
-li.turn{border-left:3px solid var(--line);padding:.1rem 0 .1rem .7rem;font-size:.95rem;white-space:pre-wrap;overflow-wrap:anywhere}
-li.turn.visitor{border-left-color:var(--accent)}
-li.turn.bot{border-left-color:var(--line)}
-li.turn.owner{border-left-color:var(--warn)}
+li.turn{border-inline-start:3px solid var(--line);padding-block:.1rem;padding-inline-start:.7rem;font-size:.95rem;white-space:pre-wrap;overflow-wrap:anywhere;unicode-bidi:plaintext}
+li.turn.visitor{border-inline-start-color:var(--accent)}
+li.turn.bot{border-inline-start-color:var(--line)}
+li.turn.owner{border-inline-start-color:var(--warn)}
 label{display:block;margin:0 0 .35rem;font-size:.9rem;color:var(--dim)}
 textarea,select{width:100%;margin:0 0 .75rem;padding:.6rem .7rem;border-radius:.5rem;border:1px solid var(--line);background:#0e1420;color:var(--ink);font:inherit}
 textarea{min-height:5.5rem;resize:vertical}
@@ -1397,6 +1479,7 @@ def render_page(
     data: Dict[str, Any] = dict(token_link or {})
     resolved = normalize_locale(locale) or FALLBACK_LOCALE
     lang_attr = resolved if resolved in LOCALES else FALLBACK_LOCALE
+    dir_attr = "rtl" if is_rtl(lang_attr) else "ltr"
     source = (form if isinstance(form, Mapping) else {}) or {}
     action = _relative_action(source.get("action", data.get("action", "")))
     needles = [str(item) for item in (data.get("needles") or []) if str(item)]
@@ -1410,7 +1493,7 @@ def render_page(
 
     parts: List[str] = [
         "<!doctype html>",
-        f'<html lang="{_e(lang_attr)}" dir="ltr">',
+        f'<html lang="{_e(lang_attr)}" dir="{_e(dir_attr)}">',
         "<head>",
         '<meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
@@ -1483,7 +1566,7 @@ def render_page(
         parts.append(f'<input type="hidden" name="nonce" value="{_e(nonce)}">')
     parts.append(f'<label for="ppx-ask">{_e(page_text(resolved, "ask_label"))}</label>')
     parts.append(
-        f'<textarea id="ppx-ask" name="message" rows="4" maxlength="{MAX_MESSAGE_CHARS}" required '
+        f'<textarea id="ppx-ask" name="message" rows="4" maxlength="{MAX_MESSAGE_CHARS}" required dir="auto" '
         f'placeholder="{_e(page_text(resolved, "ask_placeholder"))}"></textarea>'
     )
     parts.append(f'<label for="ppx-lang">{_e(page_text(resolved, "lang_label"))}</label>')

@@ -35,7 +35,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Seque
 from zoneinfo import ZoneInfo
 
 from .config import SECURE_DIR_MODE, SECURE_FILE_MODE, Settings
-from .i18n import normalize_locale
+from .i18n import LOCALES, normalize_locale
 
 PREFERENCES_FILENAME = "preferences.json"
 SCHEMA_VERSION = 1
@@ -292,7 +292,7 @@ def _validate_patch(patch: Any) -> Dict[str, Any]:
         if text:
             normalized = normalize_locale(text)
             if not normalized:
-                raise PreferenceError(f"locale={text!r} 不在 18 语种支持列表内")
+                raise PreferenceError(f"locale={text!r} 不在 {len(LOCALES)} 语种支持列表内")
             clean["locale"] = normalized
         else:
             clean["locale"] = ""
@@ -410,7 +410,7 @@ def _validate_patch(patch: Any) -> Dict[str, Any]:
             if text:
                 normalized = normalize_locale(text)
                 if not normalized:
-                    raise PreferenceError(f"copy.locale_override={text!r} 不在 18 语种支持列表内")
+                    raise PreferenceError(f"copy.locale_override={text!r} 不在 {len(LOCALES)} 语种支持列表内")
             row["locale_override"] = normalized if text else ""
         clean["copy"] = row
 

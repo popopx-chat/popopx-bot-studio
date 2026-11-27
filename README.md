@@ -2,7 +2,7 @@
 
 自托管的 POPOPX Bot 工厂 + 零代码自动回复 + 消息路由 + 开发者 Open API + 插件网关。
 一个进程管理任意多个 `popopx-cli` Bot 实例，全部通过本机回环 WebSocket 控制，
-配套 Web 控制台（18 语种）与离线冷备工具。
+配套 Web 控制台（21 语种，含阿拉伯语 RTL）与离线冷备工具。
 
 从这一版起，每个 Bot 还能开一个 **24 小时全天候替身**：端侧小模型抽意图、大模型只写话术、
 日历永远等主人点确认；两个替身之间走**只交换掩码时段**的端到端加密 A2A 协商，
@@ -15,7 +15,7 @@
   `/usr/local/bin/popopx-cli`，或用 `--no-node-download` 完全跳过。
 - 模型零下载：`needle3.cact`（33.7 MiB，<50 MB）随仓库内置，加载前做 SHA-256 完整性校验，
   部署启动后即刻可用；没有 C 运行时或 SDK 时自动退回本仓自带的确定性抽取器（第 5 节）。
-- 自检门禁：`python3 -m app.main --self-test` → **26 组 / 7710 条真实断言 / 0 失败 / 约 20.5 秒 / 退出码 0**，
+- 自检门禁：`python3 -m app.main --self-test` → **26 组 / 8287 条真实断言 / 0 失败 / 约 20.4 秒 / 退出码 0**，
   只依赖 `studio/tests/fake_popopx_cli.py`（同样讲真协议、且把 profile 存在 `bot_chat.db` 里的有状态替身），不联网、不连 SMP。
 
 English document: [`README.en.md`](README.en.md)
@@ -41,13 +41,13 @@ English document: [`README.en.md`](README.en.md)
 │  orchestrator_local.py 只读能力投影（回复/路由/忙闲/摘要/画像），按目标 Bot 隔离 │
 │  plugin_manager.py 插件总线：发现、生命周期、隔离派发、脱敏配置                   │
 │  open_api.py    Telegram 风格开发者 API（/getMe /sendMessage …）                │
-│  i18n.py        18 语种词条、协商、欢迎语模板与完整性断言                        │
+│  i18n.py        21 语种词条、协商、欢迎语模板与完整性断言                        │
 │ ── 替身机器人 ──────────────────────────────────────────────────────────────  │
 │  agent_runtime.py   编排：意图→偏好过滤→提案→卡片→确认→回执，全程写审计         │
 │  needle3_runtime.py 端侧小引擎（只抽取 5 个工具调用）+ 确定性回退抽取器          │
 │  needle_assets.py   内置权重的发现与 SHA-256 门禁，运行期零下载                 │
 │  agent_preferences.py 每 Bot 的偏好规则：工作时间/缓冲/屏蔽段/关键词/协商策略   │
-│  agent_copy.py      12 类话术 × 18 语种目录 + 占位符/文字族完整性门禁           │
+│  agent_copy.py      12 类话术 × 21 语种目录 + 占位符/文字族完整性门禁           │
 │  reasoner_bridge.py 大模型只写话术（Ollama / OpenAI 兼容，严格回环或 https）     │
 │  mac_node_bridge.py 本机 Mac Node 桥：状态、忙闲读取、approve 落库              │
 │  eco_cards.py       ::POPOPX_ECO:: 确认卡片与 ::CB:: 回执的编解码               │
@@ -97,7 +97,7 @@ studio/
   app/                     引擎源码（见上图模块分工）
   assets/models/           内置模型资产：needle3.cact + 清单 + config + 许可原文 + 说明
   plugins/                 五个内置插件
-  static/index.html        Web 控制台（零构建单页，18 语种）
+  static/index.html        Web 控制台（零构建单页，21 语种）
   site → 顶层 site/        产品站与教程
   tests/fake_popopx_cli.py 自检用的协议替身
   requirements.txt         依赖锁定
@@ -292,7 +292,7 @@ detail 只允许出现 id、计数和原因码；`converged` 之后**只产出�
 `::POPOPX_ECO::` 卡片推给主人；主人确认之前，`GET /book/<token>/invite.ics` 拿不到 .ics。
 `VEVENT` 只带会议房间链接或「POPOPX Chat 通话」说明，绝不含主人真实地址、真名、邮箱或完整日程。
 页面是自包含 HTML：不建会话、不发 Cookie、无 `<script>`、无外链、表单 `action=""`、访客输入一律
-HTML 转义，18 语种文案齐全且占位符完全一致。
+HTML 转义，21 语种文案齐全且占位符完全一致，阿拉伯语页面自动带 `dir="rtl"`。
 
 ### 5.6 通道 C：本机多 Agent 任务编排
 
@@ -350,17 +350,27 @@ HTML 转义，18 语种文案齐全且占位符完全一致。
 
 ## 7. 国际化
 
-- 18 个 iOS 对齐语种：`en, zh-Hans, zh-Hant, ja, bg, cs, de, es, fi, fr, hu, it, nl, pl, ru, th, tr, uk`，
-  缺失词条一律回退 `en`。
+- 21 个语种：iOS 对齐的 18 个（`en, zh-Hans, zh-Hant, ja, bg, cs, de, es, fi, fr, hu, it, nl,
+  pl, ru, th, tr, uk`）加 Web 扩展的巴西葡萄牙语 `pt-BR`、韩语 `ko`、阿拉伯语 `ar`；`pt` /
+  `pt-PT` 归一到 `pt-BR`，`ko-KR`、`ar-EG` 等按主语言收敛，缺失词条一律回退 `en`。
+- 阿拉伯语是唯一 RTL 语种：根节点写 `dir="rtl"` 与 `lang="ar"`，切回其余 20 种语言恢复
+  `dir="ltr"`；侧栏、抽屉、徽标、表格间距全部走 `margin-inline` / `padding-inline` /
+  `inset-inline` 等逻辑属性，方向翻转由浏览器镜像完成。
+- 技术字段强制 LTR 隔离：`127.0.0.1:8090`、控制端口 `5230–5299`、`/api/agent/orch*` 路由、
+  SQLite 状态字段、SHA-256 哈希和终端代码块都以 `dir="ltr"` + `unicode-bidi:isolate`
+  （或 `direction:ltr`）固定从左向右阅读，RTL 语种下不会被双向算法重排。
 - 零构建：结构化 JSON 目录在渲染时内联进页面（`__I18N_CATALOG_JSON__`），前端字典引擎
-  结合 `localStorage` 与 `navigator.languages` 检测语种，顶部切换器免刷新换语言。
+  结合 `localStorage` 与 `navigator.languages` 检测语种，顶部切换器免刷新换语言并持久化选择。
 - 后端按 Bot 的 `default_locale` 填充默认欢迎语模板（FastAPI 渲染），
   占位符 `{bot_name}` 等在此展开。
 - `--self-test` 的 `i18n` 分组断言每个语种与 `en` 的键集合 100% 对齐、占位符无漂移、
   无空词条，并提供 `/api/admin/i18n/parity` 在线自检。
-- 替身机器人另有一套独立话术目录：`agent_copy.py` 的 12 类话术 × 18 语种，键集、占位符集合、
+- 替身机器人另有一套独立话术目录：`agent_copy.py` 的 12 类话术 × 21 语种，键集、占位符集合、
   数字（时间窗/天数/时长都来自事实而非译文）与文字族（拉丁句里蹦出汉字即判定串语种）四项
-  全部由 `agent_copy.assert_catalog()` 把门；访客页文案同样要求 18 语种齐全且占位符完全一致。
+  全部由 `agent_copy.assert_catalog()` 把门；访客页文案同样要求 21 语种齐全且占位符完全一致。
+- 窄屏与 RTL 另有一份可跳过的浏览器实测：`node studio/tests/narrow_layout_check.mjs`，
+  在 320px 下逐语种切换控制台与官网，校验无横向溢出、`dir`/`lang`、本地存储持久化，以及
+  技术字段的 `direction:ltr` + `unicode-bidi:isolate`。
 
 ## 8. 离线冷备
 
@@ -408,7 +418,7 @@ cd studio
 | `plugins` | 104 | 发现、生命周期、掩码、隔离与计数（含 `personal_agent`） |
 | `open_api` | 119 | 五个方法、鉴权、幂等、长轮询、webhook |
 | `web_admin` | 146 | 控制台路由、CSRF/Cookie、越权与审计 |
-| `i18n` | 320 | 18 语种完整性、协商、欢迎语、页面注入 |
+| `i18n` | 444 | 21 语种完整性、RTL 元数据、协商、欢迎语、页面注入 |
 | `web_live` | 60 | 真实 ASGI 生命周期、WebSocket、冷备往返、隐私二维码 |
 | `invite_codec` | 121 | HKDF/ChaCha20 标准向量、service-suite 密钥与两条标准向量逐字节对齐、`URI_SCHEMES` 白名单（旧 `smp://` 向量拒绝解码/编码）、`/i/v1/` 路径主机校验、随机 nonce、明文不泄漏、篡改拒绝 |
 | `orchestration` | 260 | 进程内跨 Agent 派发的策略闸（默认拒绝、跳数、成环、并发）、超时熔断、异常脱敏、结果聚合与部分成功、取消、回放与任务树、`task_stats`，以及五个投影（profile/reply.compose/router/calendar mask/workspace.summarize）在真实装配栈上的非桩验证 |
@@ -419,10 +429,10 @@ cd studio
 | `install` | 276 | 脚本语法与旗标、干跑、服务用户主组与 `--group` 一致性（含真跑 `create_service_user` 的无桩探针）、回环与零二进制捆绑、内置权重清单校验、无桩残留 |
 | `mac_node` | 201 | 严格回环与 SSRF 阻断、`X-PPX-Token`、状态/忙闲/approve、超时与降级 |
 | `a2a` | 220 | 掩码投影、`FORBIDDEN_KEYS` 闸、HMAC 签名与重放、时区求交、状态机 |
-| `guest_portal` | 571 | 令牌签发/验签/过期/撤销/次数预算、并发领取、脱敏空档、.ics 门槛、页面转义 |
-| `agent_engine` | 3552 | Needle 3 抽取与确定性回退、权重 SHA-256 门禁、偏好规则、话术与推理桥降级、密钥卫生 |
-| `agent_console` | 390 | `/api/agent/*` 与 `/book/*` 路由、鉴权、面板数据结构、18 语种词条 |
-| 合计 | **7710** | 26/26 组 0 失败，退出码 0 |
+| `guest_portal` | 598 | 令牌签发/验签/过期/撤销/次数预算、并发领取、脱敏空档、.ics 门槛、页面转义与 RTL |
+| `agent_engine` | 3978 | Needle 3 抽取与确定性回退、权重 SHA-256 门禁、偏好规则、话术与推理桥降级、密钥卫生 |
+| `agent_console` | 390 | `/api/agent/*` 与 `/book/*` 路由、鉴权、面板数据结构、21 语种词条 |
+| 合计 | **8287** | 26/26 组 0 失败，退出码 0 |
 
 ## 10. 运维与安全注意
 
@@ -448,7 +458,7 @@ cd studio
   并在审计里记 `approve_failed`，日历不会被悄悄改坏，但提案会停在 `pending`。
 - A2A 不引入新的信任根：能在 SMP 队列里写出那帧的，本来就只有已配对的对方，因此签名密钥
   就是对端会话密钥。协商审计只写 id、计数和原因码，正文与标题不落审计。
-- 想让替身彻底离线：`REASONER_ENABLED=0` 即可（话术全走 18 语种模板，链路不联网）；
+- 想让替身彻底离线：`REASONER_ENABLED=0` 即可（话术全走 21 语种模板，链路不联网）；
   `MAC_NODE_ENABLED=0` 时确认落库与忙闲读取都退到本地掩码缓存，卡片流程仍然完整。
 
 ## 11. 许可

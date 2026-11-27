@@ -205,7 +205,7 @@ ensure_env() {
     printf 'CLI_BIN_PATH=/usr/local/bin/popopx-cli\n'
     printf 'BOT_WS_PORT_BASE=5230\nBOT_WS_PORT_MAX=5299\n'
     printf '# 留空 = 继承 CLI 内置 smp1..8.popopx.im 双栈集群\nBOT_SMP_SERVERS=\n'
-    # 与 app/config.py 的默认语种保持一致（管理后台支持 18 语种，可自行改 zh-Hans 等）
+    # 与 app/config.py 的默认语种保持一致（管理后台支持 21 语种，可自行改 zh-Hans 等）
     printf 'STUDIO_LOCALE=en\n'
   } >"$ENV_FILE"
   chmod 600 "$ENV_FILE"

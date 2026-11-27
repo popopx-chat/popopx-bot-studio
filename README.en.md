@@ -2,8 +2,8 @@
 
 A self-hosted Bot factory, zero-code auto-reply engine, message router, developer Open API
 and plugin gateway for the POPOPX network. One process supervises any number of
-`popopx-cli` Bot instances over loopback WebSockets, with a web console (18 locales)
-and an offline cold-backup tool.
+`popopx-cli` Bot instances over loopback WebSockets, with a web console (21 locales,
+including Arabic RTL) and an offline cold-backup tool.
 
 As of this version every Bot can also run a **24/7 stand-in**: a small on-device model extracts
 intent, a large model only writes the wording, and the calendar is never touched until the owner
@@ -20,8 +20,8 @@ account and no e-mail address.
 - Zero model downloads: `needle3.cact` (33.7 MiB, under 50 MB) ships inside the repository, is
   SHA-256 verified before loading, and is usable the moment the service starts. Without a C
   runtime or SDK the runtime falls back to the deterministic extractor in this repo (section 5).
-- Self-test gate: `python3 -m app.main --self-test` → **26 groups / 7710 real assertions /
-  0 failures / ~20.5 s / exit code 0**. It only needs `studio/tests/fake_popopx_cli.py`
+- Self-test gate: `python3 -m app.main --self-test` → **26 groups / 8287 real assertions /
+  0 failures / ~20.4 s / exit code 0**. It only needs `studio/tests/fake_popopx_cli.py`
   (a local stand-in that speaks the same wire protocol and keeps profiles in `bot_chat.db`,
   so it survives a restart like the real CLI) — no network, no SMP server.
 
@@ -50,7 +50,7 @@ browser console / developer clients
 │                    target Bot                                                    │
 │  plugin_manager.py plugin bus: discovery, lifecycle, isolated dispatch, masking  │
 │  open_api.py       Telegram-style developer API                                   │
-│  i18n.py           18 locales, negotiation, welcome templates, parity asserts     │
+│  i18n.py           21 locales, negotiation, welcome templates, parity asserts     │
 │  ── stand-in robot ──────────────────────────────────────────────────────────    │
 │  agent_runtime.py      orchestration: intent → preference filter → proposal →    │
 │                        card → approval → receipt, every step audited             │
@@ -59,7 +59,7 @@ browser console / developer clients
 │  needle_assets.py      bundled weight discovery and the SHA-256 gate             │
 │  agent_preferences.py  per-Bot rules: working hours, buffers, blocked periods,   │
 │                        keywords, negotiation policy                              │
-│  agent_copy.py         12 copy kinds × 18 locales, placeholder/script gates      │
+│  agent_copy.py         12 copy kinds × 21 locales, placeholder/script gates      │
 │  reasoner_bridge.py    the large model writes wording only (loopback/https only) │
 │  mac_node_bridge.py    local Mac Node bridge: status, availability, approve      │
 │  eco_cards.py          ::POPOPX_ECO:: card and ::CB:: receipt codec              │
@@ -110,7 +110,7 @@ studio/
   app/                     engine sources (see the diagram above)
   assets/models/           bundled model assets: needle3.cact, manifest, config, licence text, notes
   plugins/                 the five built-in plugins
-  static/index.html        web console (zero-build single page, 18 locales)
+  static/index.html        web console (zero-build single page, 21 locales)
   site/index.html          product site and tutorial
   tests/fake_popopx_cli.py protocol stand-in used by the self-test
   requirements.txt         pinned dependencies
@@ -340,7 +340,7 @@ to the owner. Before that approval, `GET /book/<token>/invite.ics` serves nothin
 contains only a meeting-room link or a "POPOPX Chat call" note — never the owner's real address,
 name, e-mail or full schedule. The page is self-contained HTML: no session, no cookie, no
 `<script>`, no external reference, visitor input HTML-escaped, the form posts to `action=""`, and
-all 18 locales ship with identical placeholders.
+all 21 locales ship with identical placeholders, and the Arabic page is rendered with `dir="rtl"`.
 
 ### 5.6 Channel C: in-process multi-agent task orchestration
 
@@ -403,21 +403,36 @@ the chain. `password` fields are masked as `********` on both read and write pat
 
 ## 7. Internationalisation
 
-- 18 iOS-aligned locales: `en, zh-Hans, zh-Hant, ja, bg, cs, de, es, fi, fr, hu, it, nl, pl, ru, th, tr, uk`;
-  any missing entry falls back to `en`.
+- 21 locales: the 18 iOS-aligned ones (`en, zh-Hans, zh-Hant, ja, bg, cs, de, es, fi, fr, hu,
+  it, nl, pl, ru, th, tr, uk`) plus the web-only Brazilian Portuguese `pt-BR`, Korean `ko` and
+  Arabic `ar`; `pt` / `pt-PT` resolve to `pt-BR`, `ko-KR` / `ar-EG` collapse to their base
+  language, and any missing entry falls back to `en`.
+- Arabic is the only RTL locale: the root element gets `dir="rtl"` and `lang="ar"`, and the
+  other 20 locales restore `dir="ltr"`. Sidebar, drawer, badge and table spacing use logical
+  properties (`margin-inline`, `padding-inline`, `inset-inline`) so the browser mirrors the
+  layout without hard-coded left/right overrides.
+- Technical values stay LTR: `127.0.0.1:8090`, control ports `5230–5299`, `/api/agent/orch*`
+  routes, SQLite status fields, SHA-256 hashes and terminal blocks carry `dir="ltr"` plus
+  `unicode-bidi:isolate` (or `direction:ltr`), so the bidi algorithm cannot reorder them under
+  Arabic.
 - Zero build: the structured JSON catalog is inlined at render time
   (`__I18N_CATALOG_JSON__`); the front-end dictionary engine combines `localStorage` with
-  `navigator.languages`, and the top switcher changes language without a reload.
+  `navigator.languages`, and the top switcher changes language without a reload and persists
+  the choice.
 - FastAPI fills each Bot's default welcome template according to its `default_locale`,
   expanding placeholders such as `{bot_name}`.
 - The `i18n` self-test group asserts that every locale's key set matches `en` exactly, that
   placeholders never drift and that no entry is empty; `/api/admin/i18n/parity` exposes the
   same check at runtime.
-- The stand-in keeps its own catalog: 12 kinds × 18 locales in `agent_copy.py`, gated by
+- The stand-in keeps its own catalog: 12 kinds × 21 locales in `agent_copy.py`, gated by
   `agent_copy.assert_catalog()` on four invariants — identical key sets, identical placeholder
   sets, numbers that come from facts rather than from the translation, and script families (a
   Han character inside a Hungarian sentence is a copy-paste accident the placeholder check cannot
-  see). The guest page requires the same 18-locale parity with matching placeholders.
+  see). The guest page requires the same 21-locale parity with matching placeholders.
+- A skippable browser check covers narrow screens and RTL:
+  `node studio/tests/narrow_layout_check.mjs` walks all 21 locales on the console and the site at
+  320px, asserting no horizontal overflow, correct `dir`/`lang`, persisted choice, and
+  `direction:ltr` + `unicode-bidi:isolate` on technical fields.
 
 ## 8. Offline cold backup
 
@@ -470,7 +485,7 @@ cd studio
 | `plugins` | 104 | discovery, lifecycle, masking, isolation and counters (including `personal_agent`) |
 | `open_api` | 119 | five methods, auth, idempotency, long polling, webhook |
 | `web_admin` | 146 | console routes, CSRF/cookie, authorisation and audit |
-| `i18n` | 320 | 18-locale completeness, negotiation, welcome text, page injection |
+| `i18n` | 444 | 21-locale completeness, RTL metadata, negotiation, welcome text, page injection |
 | `web_live` | 60 | real ASGI lifecycle, WebSocket, cold-backup round trip, privacy QR |
 | `invite_codec` | 121 | HKDF/ChaCha20 standard vectors, service-suite key and two standard vectors matched byte-for-byte, the `URI_SCHEMES` allowlist (the legacy `smp://` vector is rejected on both decode and encode), `/i/v1/` path-host checks, random nonce, no plaintext leak, tamper rejection |
 | `orchestration` | 260 | in-process cross-agent dispatch gates (default-deny, hop budget, cycle guard, concurrency), timeout circuit-breaker, exception scrubbing, result aggregation and partial success, cancellation, replay and task tree, `task_stats`, plus the five projections (profile/reply.compose/router/calendar mask/workspace.summarize) exercised on a real assembled stack rather than stubs |
@@ -481,10 +496,10 @@ cd studio
 | `install` | 276 | script syntax and flags, dry runs, service-user primary group vs `--group` (including a stubbed real run of `create_service_user`), loopback and zero-bundling, bundled-weight manifest check, no stubs |
 | `mac_node` | 201 | strict loopback and SSRF blocking, `X-PPX-Token`, status/availability/approve, timeouts and degradation |
 | `a2a` | 220 | masked projection, the `FORBIDDEN_KEYS` gate, HMAC signing and replay, timezone intersection, state machine |
-| `guest_portal` | 571 | token issue/verify/expiry/revocation/visit budget, concurrent claims, masked availability, the .ics gate, page escaping |
-| `agent_engine` | 3552 | Needle 3 extraction and the deterministic fallback, the weight SHA-256 gate, preference rules, copy and reasoner degradation, secret hygiene |
-| `agent_console` | 390 | `/api/agent/*` and `/book/*` routes, auth, panel data shapes, 18-locale strings |
-| total | **7710** | 26/26 groups, 0 failures, exit code 0 |
+| `guest_portal` | 598 | token issue/verify/expiry/revocation/visit budget, concurrent claims, masked availability, the .ics gate, page escaping and RTL |
+| `agent_engine` | 3978 | Needle 3 extraction and the deterministic fallback, the weight SHA-256 gate, preference rules, copy and reasoner degradation, secret hygiene |
+| `agent_console` | 390 | `/api/agent/*` and `/book/*` routes, auth, panel data shapes, 21-locale strings |
+| total | **8287** | 26/26 groups, 0 failures, exit code 0 |
 
 ## 10. Operations and security notes
 
@@ -518,7 +533,7 @@ cd studio
 - A2A adds no new root of trust: only an already-paired peer can write into that SMP queue, so the
   signing key is the peer session key. Negotiation audit rows carry ids, counters and reason codes
   only — never copy or titles.
-- To keep the stand-in fully offline: `REASONER_ENABLED=0` makes all copy come from the 18-locale
+- To keep the stand-in fully offline: `REASONER_ENABLED=0` makes all copy come from the 21-locale
   templates and the chain touches no network. With `MAC_NODE_ENABLED=0` the persistence and
   availability reads fall back to the masked local cache, and the card flow still works.
 

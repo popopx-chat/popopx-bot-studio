@@ -19,33 +19,34 @@
 html,body{margin:0;padding:0}
 body{background:var(--bg);color:var(--txt);font:14px/1.55 var(--sans);-webkit-text-size-adjust:100%}
 h1,h2,h3{margin:0;font-weight:600}
-.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums;unicode-bidi:isolate}
 :focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 button,input,select,textarea{font:inherit;color:inherit}
 ::selection{background:var(--acc-d);color:#04070a}
 .wrap{display:flex;flex-direction:column;min-height:100vh}
 .top{position:sticky;top:0;z-index:20;display:flex;align-items:stretch;
   border-bottom:1px solid var(--line);background:rgba(7,10,15,.95)}
-.brand{display:flex;align-items:center;gap:11px;padding:11px 18px;border-right:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:11px;padding:11px 18px;border-inline-end:1px solid var(--line)}
 .mark{width:26px;height:26px;flex:none;color:var(--acc)}
 .b1{font-size:13px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;white-space:nowrap}
 .b2{font-size:11px;color:var(--dim);max-width:32ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .strip{display:flex;flex:1;min-width:0;overflow:hidden}
-.cell{display:flex;flex-direction:column;justify-content:center;gap:2px;padding:9px 16px;border-right:1px solid var(--line);min-width:0}
+.cell{display:flex;flex-direction:column;justify-content:center;gap:2px;padding:9px 16px;border-inline-end:1px solid var(--line);min-width:0}
 .cell .k{font:10px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
 .cell .v{font-size:12px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cell .v.on{color:var(--acc)}
 .cell .v.off{color:var(--warn)}
-.tools{display:flex;align-items:center;gap:9px;padding:0 16px;margin-left:auto}
+.tools{display:flex;align-items:center;gap:9px;padding:0 16px;margin-inline-start:auto}
 .lbl{font:10px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
 .body{display:flex;flex:1;min-height:0}
-.rail{width:238px;flex:none;border-right:1px solid var(--line);padding:14px 0 10px;display:flex;flex-direction:column;background:var(--bg2)}
+.rail{width:238px;flex:none;border-inline-end:1px solid var(--line);padding:14px 0 10px;display:flex;flex-direction:column;background:var(--bg2)}
 .nav{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1px}
 .nav button{display:flex;align-items:center;gap:10px;width:100%;padding:10px 18px;background:none;border:0;
-  border-left:2px solid transparent;color:var(--mut);font-size:13px;text-align:left;cursor:pointer;transition:color .12s,background .12s}
+  border-inline-start:2px solid transparent;color:var(--mut);font-size:13px;text-align:start;cursor:pointer;transition:color .12s,background .12s}
 .nav button:hover{color:var(--txt);background:#0d131b}
 .nav button svg{width:15px;height:15px;flex:none;opacity:.7}
-.nav button[aria-current="page"]{color:var(--acc);border-left-color:var(--acc);background:linear-gradient(90deg,rgba(37,232,198,.09),transparent 60%)}
+.nav button[aria-current="page"]{color:var(--acc);border-inline-start-color:var(--acc);background:linear-gradient(90deg,rgba(37,232,198,.09),transparent 60%)}
+[dir="rtl"] .nav button[aria-current="page"]{background:linear-gradient(270deg,rgba(37,232,198,.09),transparent 60%)}
 .nav button[aria-current="page"] svg{opacity:1}
 .railfoot{margin-top:auto;padding:14px 18px 0;border-top:1px solid var(--line);font:10px/1.6 var(--mono);color:var(--dim)}
 .views{flex:1;min-width:0;padding:18px 22px 46px;overflow-x:hidden}
@@ -56,7 +57,7 @@ button,input,select,textarea{font:inherit;color:inherit}
 .card{border:1px solid var(--line);background:var(--panel)}
 .card>header{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel2)}
 .card>header h2{font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--mut);font-weight:600}
-.card>header .sp{margin-left:auto;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.card>header .sp{margin-inline-start:auto;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
 .card .bd{padding:14px}
 .card .bd.np{padding:0}
 .card.live{border-color:rgba(37,232,198,.55);box-shadow:0 0 0 1px rgba(37,232,198,.15),0 0 26px -10px var(--glow)}
@@ -78,11 +79,12 @@ input,select,textarea{background:var(--sunk);border:1px solid var(--line2);color
 input[type=checkbox]{width:15px;height:15px;padding:0;accent-color:var(--acc)}
 input.mono,textarea.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
 textarea{resize:vertical;min-height:64px}
-select{appearance:none;padding-right:26px;background-image:linear-gradient(45deg,transparent 50%,var(--mut) 50%),linear-gradient(135deg,var(--mut) 50%,transparent 50%);
+select{appearance:none;padding-inline-end:26px;background-image:linear-gradient(45deg,transparent 50%,var(--mut) 50%),linear-gradient(135deg,var(--mut) 50%,transparent 50%);
   background-position:calc(100% - 14px) 13px,calc(100% - 9px) 13px;background-size:5px 5px;background-repeat:no-repeat}
+[dir="rtl"] select{padding-inline:9px 26px;background-position:calc(0% + 9px) 13px,calc(0% + 14px) 13px}
 input:focus,select:focus,textarea:focus{border-color:var(--acc-d);outline:none;box-shadow:0 0 0 1px var(--glow)}
 table{width:100%;border-collapse:collapse}
-th{text-align:left;font:400 10px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--dim);padding:8px 10px;border-bottom:1px solid var(--line)}
+th{text-align:start;font:400 10px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--dim);padding:8px 10px;border-bottom:1px solid var(--line)}
 td{padding:8px 10px;border-bottom:1px solid #131a23;vertical-align:middle;font-size:13px}
 tbody tr:hover{background:#0d131b}
 .st{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--mut);white-space:nowrap}
@@ -97,10 +99,12 @@ tbody tr:hover{background:#0d131b}
 .pill{display:inline-block;padding:2px 7px;border:1px solid var(--line2);font:10px/1.6 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
 .pill.acc{border-color:var(--acc-d);color:var(--acc)}
 .pill.warn{border-color:var(--warn);color:var(--warn)}
-.note{border-left:2px solid var(--warn);background:rgba(242,181,60,.07);padding:9px 12px;font-size:12px;color:#e9ddc4;margin:0 0 8px}
-.note.bad{border-left-color:var(--bad);background:rgba(255,107,96,.08);color:#f1d5d2}
+.note{border-inline-start:2px solid var(--warn);background:rgba(242,181,60,.07);padding:9px 12px;font-size:12px;color:#e9ddc4;margin:0 0 8px}
+.note.bad{border-inline-start-color:var(--bad);background:rgba(255,107,96,.08);color:#f1d5d2}
 pre{margin:0;padding:11px 13px;background:var(--sunk);border:1px solid var(--line);overflow:auto;
-  font:12px/1.5 var(--mono);color:#b8cadb;max-height:300px;tab-size:2;white-space:pre-wrap;overflow-wrap:anywhere}
+  font:12px/1.5 var(--mono);color:#b8cadb;max-height:300px;tab-size:2;white-space:pre-wrap;overflow-wrap:anywhere;
+  direction:ltr;unicode-bidi:isolate}
+input.mono,textarea.mono,.kv dd,.node{direction:ltr;unicode-bidi:isolate}
 .kv{display:grid;grid-template-columns:minmax(110px,170px) minmax(0,1fr);gap:5px 14px;font-size:12px;align-items:baseline;margin:0}
 .kv dt{font:10px/1.5 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
 .kv dd{margin:0;font-family:var(--mono);word-break:break-all}
@@ -113,14 +117,15 @@ pre{margin:0;padding:11px 13px;background:var(--sunk);border:1px solid var(--lin
 .node.tgt{border-color:var(--acc-d);color:var(--acc)}
 .link{flex:1;min-width:30px;height:1px;background:var(--line2);position:relative}
 .link::after{content:"";position:absolute;right:-1px;top:-4px;width:8px;height:8px;border-top:1px solid var(--acc-d);border-right:1px solid var(--acc-d);transform:rotate(45deg)}
+[dir="rtl"] .link::after{right:auto;left:-1px;border-top:0;border-right:0;border-bottom:1px solid var(--acc-d);border-left:1px solid var(--acc-d)}
 .meta{font:11px/1.5 var(--mono);color:var(--dim)}
 .empty{padding:16px;color:var(--mut);border:1px dashed var(--line2);background:var(--sunk);margin:0}
 .hd{display:flex;align-items:center;gap:12px;margin:0 0 14px;padding-bottom:9px;border-bottom:1px solid var(--line)}
 .hd h1{font-size:14px;letter-spacing:.13em;text-transform:uppercase}
-.hd .sp{margin-left:auto;font:11px/1 var(--mono);color:var(--dim)}
+.hd .sp{margin-inline-start:auto;font:11px/1 var(--mono);color:var(--dim)}
 .sect{margin-top:16px}
 .gap{gap:11px}
-#toasts{position:fixed;right:16px;bottom:16px;z-index:60;display:flex;flex-direction:column;gap:8px;max-width:min(420px,86vw)}
+#toasts{position:fixed;inset-inline-end:16px;bottom:16px;z-index:60;display:flex;flex-direction:column;gap:8px;max-width:min(420px,86vw)}
 .toast{border:1px solid var(--line2);background:#0d141d;padding:9px 12px;font-size:12px;display:flex;gap:9px;align-items:baseline;box-shadow:0 8px 24px -12px #000;transition:opacity .25s}
 .toast .tag{font:10px/1.6 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--acc);flex:none;display:none}
 .toast.ok .tag:first-child,.toast.err .tag:nth-child(2){display:inline}
@@ -139,14 +144,14 @@ details.cfg[open]>summary::before{content:"− "}
 @media(max-width:1180px){.g4{grid-template-columns:repeat(2,minmax(0,1fr))}.g3{grid-template-columns:1fr}}
 @media(max-width:900px){
   .body{flex-direction:column}
-  .rail{width:auto;border-right:0;border-bottom:1px solid var(--line);padding:0;position:sticky;top:53px;z-index:15}
+  .rail{width:auto;border-inline-end:0;border-bottom:1px solid var(--line);padding:0;position:sticky;top:53px;z-index:15}
   .nav{flex-direction:row;overflow-x:auto}
-  .nav button{border-left:0;border-bottom:2px solid transparent;padding:11px 14px;white-space:nowrap;width:auto}
-  .nav button[aria-current="page"]{border-left:0;border-bottom-color:var(--acc);background:linear-gradient(180deg,transparent,rgba(37,232,198,.09))}
+  .nav button{border-inline-start:0;border-bottom:2px solid transparent;padding:11px 14px;white-space:nowrap;width:auto}
+  .nav button[aria-current="page"]{border-inline-start:0;border-bottom-color:var(--acc);background:linear-gradient(180deg,transparent,rgba(37,232,198,.09))}
   .railfoot,.b2{display:none}
-  .brand{border-right:0;padding:9px 12px}
+  .brand{border-inline-end:0;padding:9px 12px}
   .top{flex-wrap:wrap}
-  .strip{order:3;width:100%;border-top:1px solid var(--line)}
+  .strip{order:3;flex:0 0 100%;width:100%;flex-wrap:wrap;overflow:visible;border-top:1px solid var(--line)}
   .cell{padding:7px 12px}
   .views{padding:14px 12px 40px}}
 @media(max-width:820px){.g2{grid-template-columns:1fr}}
@@ -219,11 +224,11 @@ details.cfg[open]>summary::before{content:"− "}
   <div class="grid g2 sect">
     <div class="card">
       <header><h2>GET /api/admin/logs</h2><div class="sp"><button type="button" class="btn sm" id="btn-logs"><span data-i18n="action_refresh">Refresh</span></button></div></header>
-      <div class="bd"><pre id="logs">—</pre></div>
+      <div class="bd"><pre dir="ltr" id="logs">—</pre></div>
     </div>
     <div class="card">
       <header><h2>GET /api/admin/updates</h2><div class="sp"><button type="button" class="btn sm" id="btn-updates"><span data-i18n="action_refresh">Refresh</span></button></div></header>
-      <div class="bd"><pre id="updates">—</pre></div>
+      <div class="bd"><pre dir="ltr" id="updates">—</pre></div>
     </div>
   </div>
 </section>
@@ -308,7 +313,7 @@ details.cfg[open]>summary::before{content:"− "}
         <div class="row">
           <label class="fld"><span>priority</span><input id="q-prio" type="number" value="100" step="1" class="mono" style="width:100px"></label>
           <label class="row" for="q-on" style="gap:7px;align-self:flex-end"><input type="checkbox" id="q-on" checked><span class="meta">enabled</span></label>
-          <button type="submit" class="btn pri" style="margin-left:auto"><span data-i18n="action_save">Save</span></button>
+          <button type="submit" class="btn pri" style="margin-inline-start:auto"><span data-i18n="action_save">Save</span></button>
         </div>
         <p class="meta">{sender_name} · {time} · {bot_name}</p>
       </form></div>
@@ -318,7 +323,7 @@ details.cfg[open]>summary::before{content:"− "}
       <div class="bd"><form id="f-preview" class="grid gap">
         <label class="fld"><span>text</span><input id="p-text" data-i18n-attr="placeholder:field_pattern"></label>
         <div class="row"><button type="submit" class="btn pri"><span data-i18n="action_test">Test</span></button></div>
-      </form><pre id="p-out" class="sect">—</pre></div>
+      </form><pre dir="ltr" id="p-out" class="sect">—</pre></div>
     </div>
   </div>
 </section>
@@ -354,7 +359,7 @@ details.cfg[open]>summary::before{content:"− "}
         <div class="row">
           <label class="row" for="d-quote"><input type="checkbox" id="d-quote" checked><span class="meta" data-i18n="field_quote">Quote original</span></label>
           <label class="row" for="d-on"><input type="checkbox" id="d-on" checked><span class="meta">enabled</span></label>
-          <button type="submit" class="btn pri" style="margin-left:auto"><span data-i18n="action_save">Save</span></button>
+          <button type="submit" class="btn pri" style="margin-inline-start:auto"><span data-i18n="action_save">Save</span></button>
         </div>
       </form></div>
     </div>
@@ -367,7 +372,7 @@ details.cfg[open]>summary::before{content:"− "}
         </div>
         <label class="fld"><span>text</span><input id="v-text" data-i18n-attr="placeholder:field_template"></label>
         <div class="row"><button type="submit" class="btn pri"><span data-i18n="action_test">Test</span></button></div>
-      </form><pre id="v-out" class="sect">—</pre></div>
+      </form><pre dir="ltr" id="v-out" class="sect">—</pre></div>
     </div>
   </div>
 </section>
@@ -412,12 +417,12 @@ details.cfg[open]>summary::before{content:"− "}
         <label class="fld"><span>limit</span><input id="a-limit" type="number" value="20" min="1" max="500" class="mono"></label>
       </div>
       <label class="fld sect"><span>webhook_url</span><input id="a-hook" class="mono" placeholder="https://example.test/hook"></label>
-      <pre id="a-curl" class="sect">—</pre>
+      <pre dir="ltr" id="a-curl" class="sect">—</pre>
     </div>
   </div>
   <div class="card sect">
     <header><h2>HTTP status · JSON</h2><div class="sp"><span class="pill" id="a-status">idle</span></div></header>
-    <div class="bd"><pre id="a-out" tabindex="0">—</pre></div>
+    <div class="bd"><pre dir="ltr" id="a-out" tabindex="0">—</pre></div>
   </div>
 </section>
 
@@ -432,7 +437,7 @@ details.cfg[open]>summary::before{content:"− "}
         <label class="fld"><span data-i18n="backup_passphrase">Passphrase (optional)</span><input id="x-pass" type="password" autocomplete="new-password"></label>
         <label class="row" for="x-inline"><input type="checkbox" id="x-inline" checked><span class="meta">inline: true</span></label>
         <div class="row"><button type="submit" class="btn pri"><span data-i18n="backup_export">Export bundle</span></button></div>
-      </form><pre id="x-out" class="sect">—</pre></div>
+      </form><pre dir="ltr" id="x-out" class="sect">—</pre></div>
     </div>
     <div class="card">
       <header><h2 data-i18n="backup_import">Restore bundle</h2></header>
@@ -442,7 +447,7 @@ details.cfg[open]>summary::before{content:"− "}
         <label class="fld"><span data-i18n="backup_passphrase">Passphrase (optional)</span><input id="i-pass" type="password" autocomplete="new-password"></label>
         <label class="row" for="i-start"><input type="checkbox" id="i-start"><span class="meta">start: true</span></label>
         <div class="row"><button type="submit" class="btn pri"><span data-i18n="backup_import">Restore bundle</span></button></div>
-      </form><pre id="i-out" class="sect">—</pre></div>
+      </form><pre dir="ltr" id="i-out" class="sect">—</pre></div>
     </div>
   </div>
   <div class="card sect">
@@ -453,7 +458,7 @@ details.cfg[open]>summary::before{content:"− "}
     <header><h2>GET /api/admin/config</h2><div class="sp"><span class="pill" id="cfg-loop">loopback_only</span>
       <button type="button" class="btn sm" id="btn-cfg"><span data-i18n="action_refresh">Refresh</span></button></div></header>
     <div class="bd"><div id="cfg-warn"></div><dl class="kv sect" id="cfg-kv"></dl>
-      <details class="cfg"><summary>example_argv · wrapper_preview</summary><pre id="cfg-argv" class="sect">—</pre></details>
+      <details class="cfg"><summary>example_argv · wrapper_preview</summary><pre dir="ltr" id="cfg-argv" class="sect">—</pre></details>
     </div>
   </div>
 </section>
@@ -473,7 +478,7 @@ details.cfg[open]>summary::before{content:"− "}
         <button type="button" class="btn sm" id="btn-ag-reload"><span data-i18n="agent_reload">Reload weights</span></button>
         <button type="button" class="btn sm" id="btn-ag-probe"><span data-i18n="agent_probe">Probe node</span></button>
       </div>
-      <pre id="ag-out" class="sect">—</pre></div>
+      <pre dir="ltr" id="ag-out" class="sect">—</pre></div>
   </div>
   <div class="grid g2 sect">
     <div class="card">
@@ -487,7 +492,7 @@ details.cfg[open]>summary::before{content:"− "}
         <div class="row"><button type="submit" class="btn pri"><span data-i18n="action_test">Test</span></button></div>
       </form>
       <p class="meta" style="margin:12px 0 0" data-i18n="agent_test_note">Extraction only — nothing is written to the calendar.</p>
-      <pre id="ax-out" class="sect">—</pre></div>
+      <pre dir="ltr" id="ax-out" class="sect">—</pre></div>
     </div>
     <div class="card">
       <header><h2 data-i18n="agent_tools">Tool calls</h2><div class="sp"><span class="pill" id="ag-tools-n">tools: 0</span></div></header>
@@ -605,7 +610,7 @@ details.cfg[open]>summary::before{content:"− "}
           <label class="fld"><span>owner_tz</span><input id="n-tz" class="mono" placeholder="Asia/Shanghai"></label>
         </div>
         <div class="row"><button type="submit" class="btn pri"><span data-i18n="a2a_start">Start negotiation</span></button></div>
-      </form><pre id="n-out" class="sect">—</pre>
+      </form><pre dir="ltr" id="n-out" class="sect">—</pre>
       <p class="meta sect">POST /api/agent/negotiate · masked slots only, never a full calendar</p></div>
     </div>
   </div>
@@ -620,7 +625,7 @@ details.cfg[open]>summary::before{content:"− "}
   </div>
   <div class="card sect">
     <header><h2 data-i18n="a2a_audit">Audit trail</h2><div class="sp"><button type="button" class="btn sm" id="btn-a2-audit"><span data-i18n="action_refresh">Refresh</span></button></div></header>
-    <div class="bd"><div id="a2-flow"></div><pre id="a2-out" class="sect">—</pre></div>
+    <div class="bd"><div id="a2-flow"></div><pre dir="ltr" id="a2-out" class="sect">—</pre></div>
   </div>
 </section>
 
@@ -676,7 +681,7 @@ details.cfg[open]>summary::before{content:"− "}
         <button type="submit" class="btn pri"><span data-i18n="orch_run">Run</span></button>
         <button type="button" class="btn" id="oc-replay"><span data-i18n="orch_replay">Replay</span></button>
       </div>
-    </form><pre id="od-out" class="sect">—</pre></div>
+    </form><pre dir="ltr" id="od-out" class="sect">—</pre></div>
   </div>
   <div class="card sect">
     <header><h2 data-i18n="orch_tasks">Tasks</h2><div class="sp"><span class="pill" id="oc-funnel">ledger</span></div></header>
@@ -685,7 +690,7 @@ details.cfg[open]>summary::before{content:"− "}
       <tbody id="oc-tasks"></tbody>
     </table></div>
     <div id="oc-empty" hidden><p class="empty" data-i18n="orch_empty">No tasks dispatched yet.</p></div>
-    <pre id="oc-out" class="sect">—</pre></div>
+    <pre dir="ltr" id="oc-out" class="sect">—</pre></div>
   </div>
 </section>
 
@@ -777,17 +782,17 @@ details.cfg[open]>summary::before{content:"− "}
 
   /* ========================================================== i18n engine */
   var LS_LOC = "popopx.locale", LS_TOK = "popopx.adminToken", LS_BASE = "popopx.apiBase", NAME = "admin";
-  /* The 18 codes are the detection floor: the switcher and normalize() must work
+  /* The 21 codes are the detection floor: the switcher and normalize() must work
      before the catalog is spliced or fetched. Translations still come from CAT only. */
-  var CAT = { fallback: "en", locales: ["en", "zh-Hans", "zh-Hant", "ja", "bg", "cs", "de", "es", "fi", "fr", "hu", "it", "nl", "pl", "ru", "th", "tr", "uk"],
-            labels: { en: "English" }, admin: {}, site: {}, welcome: {} };
+  var CAT = { fallback: "en", locales: ["en", "zh-Hans", "zh-Hant", "ja", "ar", "bg", "cs", "de", "es", "fi", "fr", "hu", "it", "ko", "nl", "pl", "pt-BR", "ru", "th", "tr", "uk"],
+            rtl: ["ar"], labels: { en: "English" }, admin: {}, site: {}, welcome: {} };
   var cur = "en", reRender = null;
-  /* zh variants are the only tags that need mapping; anything else unknown stays
-     unsupported so detect() can keep walking the candidate list. */
+  /* zh variants need an explicit mapping; pt collapses to the only Portuguese
+     catalog; anything else unknown stays unsupported so detect() keeps walking. */
   var ALIAS = {
     zh: "zh-Hans", "zh-cn": "zh-Hans", "zh-sg": "zh-Hans", "zh-hans": "zh-Hans", "zh-hans-cn": "zh-Hans",
     "zh-tw": "zh-Hant", "zh-hk": "zh-Hant", "zh-mo": "zh-Hant", "zh-hant": "zh-Hant",
-    "zh-hant-tw": "zh-Hant", "zh-hant-hk": "zh-Hant"
+    "zh-hant-tw": "zh-Hant", "zh-hant-hk": "zh-Hant", pt: "pt-BR"
   };
 
   function table() {
@@ -886,10 +891,17 @@ details.cfg[open]>summary::before{content:"− "}
     return sel;
   }
 
+  function applyDir() {
+    var list = CAT.rtl || [], isRtl = false;
+    for (var i = 0; i < list.length; i++) if (list[i] === cur) isRtl = true;
+    document.documentElement.setAttribute("dir", isRtl ? "rtl" : "ltr");
+  }
+
   function set(locale) {
     cur = normalize(locale) || CAT.fallback || "en";
     try { localStorage.setItem(LS_LOC, cur); } catch (e) { /* private mode */ }
     document.documentElement.lang = cur;
+    applyDir();
     var sel = document.getElementById("lang");
     if (sel && sel.value !== cur) sel.value = cur;
     apply();
@@ -898,8 +910,10 @@ details.cfg[open]>summary::before{content:"− "}
 
   function adopt(data) {
     if (!data || !data.locales || !data.locales.length) return;
-    CAT = { fallback: data.fallback || "en", locales: data.locales, labels: data.labels || {},
+    CAT = { fallback: data.fallback || "en", locales: data.locales, rtl: data.rtl || [],
+            labels: data.labels || {},
             admin: data.admin || {}, site: data.site || {}, welcome: data.welcome || {} };
+    applyDir();
   }
 
   function loadEmbedded() {
@@ -2315,6 +2329,7 @@ details.cfg[open]>summary::before{content:"− "}
     loadEmbedded();
     cur = normalize(detect()) || CAT.fallback || "en";   /* boot never persists: only set() does */
     document.documentElement.lang = cur;
+    applyDir();
     localeSelectors();
     apply();
     get("a-base").value = apiBase() + "/api/v1";
@@ -2339,6 +2354,7 @@ details.cfg[open]>summary::before{content:"− "}
       if (!loaded()) return;
       cur = normalize(cur) || CAT.fallback;
       document.documentElement.lang = cur;
+      applyDir();
       localeSelectors();
       apply();
       if (reRender) reRender();
