@@ -273,7 +273,16 @@ def build_stack(
     agent = AgentRuntime(db=ledger, settings=conf, sender=build_sender(services))
     stack = StudioStack(conf, ledger, supervisor, rules, router, plugins, gateway, services,
                         agent=agent)
-    stack.orchestrator = attach_local_capabilities(Orchestrator(ledger), stack=stack)
+    orchestrator = attach_local_capabilities(Orchestrator(ledger), stack=stack)
+    # 三个回调都是旁路：画像决定超时/留存/隔离，清理在终态删任务临时目录，状态监听
+    # 只负责把「等审批 / 已落定」变成主人会话里的卡片。任何一个失败都不改状态机结果。
+    orchestrator.attach_hooks(
+        profile_provider=agent.execution_profile,
+        cleanup=agent.cleanup_task_workspace,
+        state=agent.push_task_card,
+    )
+    agent.attach_task_orchestrator(orchestrator)
+    stack.orchestrator = orchestrator
     return stack
 
 

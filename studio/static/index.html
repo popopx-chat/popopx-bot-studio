@@ -89,8 +89,8 @@ td{padding:8px 10px;border-bottom:1px solid #131a23;vertical-align:middle;font-s
 tbody tr:hover{background:#0d131b}
 .st{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--mut);white-space:nowrap}
 .st b{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
-.st[data-s="running"],.st[data-s="ok"],.st[data-s="loaded"],.st[data-s="succeeded"]{color:var(--acc)}
-.st[data-s="starting"],.st[data-s="partial"],.st[data-s="enabled"],.st[data-s="queued"],.st[data-s="timeout"],.st[data-s="refused"],.st[data-s="cancelled"]{color:var(--warn)}
+.st[data-s="running"],.st[data-s="ok"],.st[data-s="loaded"],.st[data-s="succeeded"],.st[data-s="workspace_cleanup"]{color:var(--acc)}
+.st[data-s="starting"],.st[data-s="partial"],.st[data-s="enabled"],.st[data-s="queued"],.st[data-s="timeout"],.st[data-s="refused"],.st[data-s="cancelled"],.st[data-s="awaiting_user"],.st[data-s="scheduled"],.st[data-s="allocated"]{color:var(--warn)}
 .st[data-s="error"],.st[data-s="failed"],.st[data-s="disabled"],.st[data-s="off"]{color:var(--bad)}
 .trend{display:flex;align-items:flex-end;gap:5px;height:104px}
 .trend i{flex:1;min-height:2px;background:linear-gradient(180deg,var(--acc),rgba(15,156,134,.3));opacity:.85}
@@ -763,6 +763,7 @@ details.cfg[open]>summary::before{content:"− "}
     <span hidden data-i18n="orch_no_grants">No grant yet</span>
     <span hidden data-i18n="orch_revoke">Revoke</span>
     <span hidden data-i18n="orch_cancel">Cancel</span>
+    <span hidden data-i18n="orch_approve">Approve</span>
     <span hidden data-i18n="orch_same_bot">Same Bot</span>
     <span hidden data-i18n="orch_no_thread">No thread</span>
   </div>
@@ -1869,7 +1870,7 @@ details.cfg[open]>summary::before{content:"− "}
   }
 
   /* ========================================================= orchestration */
-  var ORCH = AGENT_API + "/orch";
+  var ORCH = AGENT_API + "/orch", TASK_API = "/api/v1/tasks";
   function ocBot() { return get("oc-bot").value; }
   function ocStamp(d) {
     get("oc-stamp").textContent = "orchestrator";
@@ -1949,8 +1950,12 @@ details.cfg[open]>summary::before{content:"− "}
           get("oc-out").textContent = json(d);
         }).catch(guard());
       }));
-      if (k.status === "running") td.appendChild(btn(t("orch_cancel"), "sm dgr", function () {
-        api(ORCH + "/tasks/" + encodeURIComponent(k.id) + "/cancel", { method: "POST" })
+      if (k.status === "awaiting_user") td.appendChild(btn(t("orch_approve"), "sm pri", function () {
+        api(TASK_API + "/" + encodeURIComponent(k.id) + "/approve", { method: "POST" })
+          .then(function () { loadOrch(); }).catch(guard());
+      }));
+      if (k.status === "running" || k.status === "awaiting_user") td.appendChild(btn(t("orch_cancel"), "sm dgr", function () {
+        api(TASK_API + "/" + encodeURIComponent(k.id) + "/cancel", { method: "POST" })
           .then(function () { loadOrch(); }).catch(guard());
       }));
       tr.appendChild(td);

@@ -21,6 +21,7 @@ import json
 import logging
 import re
 import secrets
+import shutil
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -41,6 +42,12 @@ from .a2a import (
 )
 from .agent_copy import render as render_copy
 from .agent_preferences import PreferenceStore
+from .agent_task_cards import (
+    task_approval_card,
+    task_choice_card,
+    task_progress_card,
+    task_result_card,
+)
 from .bot_supervisor import BotPaths, parse_chat_ref
 from .config import SECURE_FILE_MODE, Settings, load_settings
 from .database import Database
@@ -57,6 +64,7 @@ from .ics import build_calendar, event_uid, ics_filename
 from .i18n import normalize_locale, t as translate
 from .mac_node_bridge import CACHE_SOURCE, MacNodeBridge, iso_utc
 from .needle3_runtime import DEFAULT_DURATION_MINUTES, Extraction, NeedleRuntime, ToolCall
+from .orchestrator import OrchestratorError, normalize_profile
 from .reasoner_bridge import ReasonerBridge
 
 log = logging.getLogger("popopx.studio.agent")
@@ -96,8 +104,68 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
 Sender = Callable[..., Awaitable[Any]]
 
+#: 任务号前缀（``tk_<12 hex>``）：回执里靠它把任务卡片与日历提案（``pr_``）分开路由。
+TASK_REF_PREFIX = "tk_"
+#: 目标 Bot 目录下、每次任务专属的临时工作区；终态清理只碰这一个子目录。
+TASK_SCRATCH_DIR = "task-scratch"
+
 
 # ------------------------------------------------------------------- 数据结构
+@dataclass
+class ExecutionProfile:
+    """每个 Agent 的执行画像（compute / privacy / permissions）。
+
+    存于插件配置的 ``execution`` 键，**不进** :data:`DEFAULT_CONFIG` —— 它没有可继承的
+    默认值，缺省就该是"最保守的默认画像"。字段收敛与上限（``max_runtime_seconds``
+    0.5–300、隔离模式枚举、留存模式枚举）统一由
+    :func:`app.orchestrator.normalize_profile` 负责，这里只做形状转换，避免两套夹取。
+    """
+
+    preferred_node: str = ""
+    isolation: str = "process"
+    max_runtime_seconds: float = 120.0
+    retention_mode: str = "user_owned"
+    memory_write_approval: bool = False
+    files: List[str] = field(default_factory=list)
+    browser: List[str] = field(default_factory=list)
+    network: List[str] = field(default_factory=list)
+
+    @classmethod
+    def from_mapping(cls, raw: Optional[Mapping[str, Any]]) -> "ExecutionProfile":
+        norm = normalize_profile(raw)
+        compute = norm["compute"]
+        privacy = norm["privacy"]
+        permissions = norm["permissions"]
+        return cls(
+            preferred_node=str(compute["preferred_node"]),
+            isolation=str(compute["isolation"]),
+            max_runtime_seconds=float(compute["max_runtime_seconds"]),
+            retention_mode=str(privacy["retention_mode"]),
+            memory_write_approval=bool(privacy["memory_write_approval"]),
+            files=list(permissions["files"]),
+            browser=list(permissions["browser"]),
+            network=list(permissions["network"]),
+        )
+
+    def as_mapping(self) -> Dict[str, Any]:
+        return {
+            "compute": {
+                "preferred_node": self.preferred_node,
+                "isolation": self.isolation,
+                "max_runtime_seconds": self.max_runtime_seconds,
+            },
+            "privacy": {
+                "retention_mode": self.retention_mode,
+                "memory_write_approval": self.memory_write_approval,
+            },
+            "permissions": {
+                "files": list(self.files),
+                "browser": list(self.browser),
+                "network": list(self.network),
+            },
+        }
+
+
 @dataclass
 class SlotResult:
     """一次「查空档」的完整结论：时段、来源、是否可信、被规则挡掉了多少。"""
@@ -270,6 +338,44 @@ def json_safe(value: Any) -> str:
         return str(value)[:300]
 
 
+def task_scope(profile: Mapping[str, Any]) -> str:
+    """审批卡上那句「权限范围」：只列画像里的取值，不发明任何新字段。
+
+    产出是 ``isolation=… retention=… files=… browser=… network=…`` 这种机器可读的
+    spec 串，本身不含自然语言，因此 21 种语言的审批卡可以共用它。
+    """
+    compute = dict(profile.get("compute") or {})
+    privacy = dict(profile.get("privacy") or {})
+    permissions = dict(profile.get("permissions") or {})
+    parts = [
+        f"isolation={_clean(compute.get('isolation'), 32) or 'process'}",
+        f"retention={_clean(privacy.get('retention_mode'), 32) or 'user_owned'}",
+    ]
+    node = _clean(compute.get("preferred_node"), 64)
+    if node:
+        parts.append(f"node={node}")
+    for key in ("files", "browser", "network"):
+        values = [str(item)[:64] for item in list(permissions.get(key) or ())]
+        parts.append(f"{key}={','.join(values) if values else '-'}")
+    return " ".join(parts)[:240]
+
+
+def task_result_summary(task: Mapping[str, Any], limit: int = 240) -> str:
+    """结果卡上的一句话摘要：先看能力返回值，再退回编排器的 detail。"""
+    result = task.get("result")
+    if isinstance(result, Mapping):
+        for key in ("summary", "detail", "message"):
+            text = _clean(result.get(key), limit)
+            if text:
+                return text
+    text = _clean(task.get("detail"), limit)
+    return "" if text == _clean(task.get("status"), 32) else text
+
+
+def _task_label(task: Mapping[str, Any]) -> str:
+    return _clean(task.get("capability"), 64) or "-"
+
+
 # --------------------------------------------------------------------- 运行时
 class AgentRuntime:
     """一个进程只有一个 :class:`AgentRuntime`（挂在 ``StudioStack.agent`` 上）。
@@ -300,7 +406,22 @@ class AgentRuntime:
         self._negotiator: Optional[Negotiator] = None
         self._peers: Dict[str, Dict[str, Peer]] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._counts = {"handled": 0, "a2a": 0, "cards": 0, "approvals": 0, "ics": 0, "errors": 0}
+        self._task_orchestrator: Any = None
+        #: 推过审批卡的任务 → 卡片 id。任务落定后就地改写同一张卡片，而不是再冒一个新气泡。
+        self._task_cards: Dict[str, str] = {}
+        self._task_card_tasks: set[asyncio.Task] = set()
+        self._counts = {
+            "handled": 0,
+            "a2a": 0,
+            "cards": 0,
+            "approvals": 0,
+            "ics": 0,
+            "errors": 0,
+            "task_cards": 0,
+            "task_approvals": 0,
+            "task_declines": 0,
+            "task_choices": 0,
+        }
         self.errors: List[Dict[str, Any]] = []
 
     # ------------------------------------------------------------ 协作对象
@@ -363,6 +484,14 @@ class AgentRuntime:
             self._loop = None
         return self._loop
 
+    def attach_task_orchestrator(self, orchestrator: Any) -> None:
+        """接上本进程的编排器：任务审批回执（``::CB::ppxok_tk_…``）要靠它续跑。
+
+        编排器反向注入三个旁路回调（画像 / 清理 / 状态监听），卡片发送走
+        :meth:`push_task_card` —— 那条路径是同步的，绝不 await 编排器的状态机。
+        """
+        self._task_orchestrator = orchestrator
+
     def close(self) -> None:
         """卸载权重；由 ``StudioStack.stop()`` 调用。"""
         if self._needle is not None:
@@ -405,6 +534,26 @@ class AgentRuntime:
 
     def owner_chat(self, bot_id: str, config: Optional[Mapping[str, Any]] = None) -> str:
         return str(self.config_for(bot_id, config)["owner_chat"])
+
+    def execution_profile(
+        self, bot_id: str, config: Optional[Mapping[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """该 Bot 的执行画像（已收敛成固定形状，编排层直接可用）。
+
+        ``execution`` 是插件配置里的自由键，不像 :data:`DEFAULT_CONFIG` 那样被
+        :meth:`config_for` 继承，因此这里单独读一次账本；``config`` 参数只接受显式传入
+        的画像，便于自检和宿主注入，不会去猜调用方意图。
+        """
+        raw: Optional[Mapping[str, Any]] = config
+        if raw is None and self.db is not None and bot_id:
+            try:
+                _enabled, stored = self.db.effective_plugin_config(PLUGIN_ID, bot_id) or (False, {})
+                execution = dict(stored or {}).get("execution")
+                if isinstance(execution, Mapping):
+                    raw = execution
+            except Exception as exc:  # noqa: BLE001 - 画像读不到就退回最保守的默认画像
+                self._fail("execution_profile", exc)
+        return ExecutionProfile.from_mapping(raw).as_mapping()
 
     def bot(self, bot_id: str) -> Dict[str, Any]:
         if self.db is None or not bot_id:
@@ -1179,6 +1328,10 @@ class AgentRuntime:
             return ""
         if self.db is None:
             return ""
+        # 任务卡片的回执与日历提案的回执共用同一个通道，靠 ref 前缀分流：
+        # ``tk_…`` 归编排器任务，``pr_…`` 才是提案。
+        if ref.startswith(TASK_REF_PREFIX):
+            return await self.handle_task_callback(bot_id, kind, ref, chat_ref=chat_ref)
         record = self.db.get_proposal(ref)
         row = self.preferences.load(bot_id)
         language = self.locale_for(bot_id, row)
@@ -1318,6 +1471,351 @@ class AgentRuntime:
             self._fail("status_card", exc, bot_id=bot_id)
             return False
         return await self._send(bot_id, chat, frame)
+
+    # --------------------------------------------------------- 任务卡片（v1）
+    def push_task_card(self, task: Mapping[str, Any]) -> bool:
+        """编排器状态监听（同步）：只把 ``awaiting_user`` 与终态变成卡片。
+
+        编排器在状态迁移里同步调用本函数，绝不能在这里 await 发送：有运行中的循环就
+        ``create_task``，循环在别的线程就 ``run_coroutine_threadsafe``，完全没有循环
+        （自检 / 脚本）就 ``asyncio.run``。``flush_task_cards`` 负责排空。
+        """
+        row = dict(task or {})
+        bot_id = _clean(row.get("origin_bot_id"), 64)
+        status = _clean(row.get("status"), 32)
+        if not bot_id or status not in ("awaiting_user", "workspace_cleanup", "failed", "cancelled"):
+            return False
+        coro = self._push_task_card(bot_id, row)
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is not None:
+            spawned = running.create_task(coro)
+            self._task_card_tasks.add(spawned)
+            spawned.add_done_callback(self._task_card_done)
+            return True
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(coro, loop)
+            except RuntimeError:
+                coro.close()
+                return False
+            return True
+        try:
+            return bool(asyncio.run(coro))
+        except Exception as exc:  # noqa: BLE001 - 卡片是旁路，失败只记录
+            self._fail("task_card", exc, bot_id=bot_id)
+            return False
+
+    def _task_card_done(self, spawned: "asyncio.Task[Any]") -> None:
+        self._task_card_tasks.discard(spawned)
+        if spawned.cancelled():
+            return
+        exc = spawned.exception()
+        if exc is not None:
+            self._fail("task_card", exc)
+
+    async def flush_task_cards(self) -> int:
+        """等所有已排程的任务卡片投递完（自检与关停用），返回排空条数。"""
+        pending = [item for item in self._task_card_tasks if not item.done()]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        return len(pending)
+
+    async def _push_task_card(self, bot_id: str, task: Mapping[str, Any]) -> bool:
+        try:
+            if _clean(task.get("status"), 32) == "awaiting_user":
+                return await self._push_task_approval(bot_id, task)
+            return await self._push_task_result(bot_id, task)
+        except Exception as exc:  # noqa: BLE001 - 任何一帧发不出去都只是少一张卡片
+            self._fail("task_card", exc, bot_id=bot_id)
+            return False
+
+    async def _push_task_approval(self, bot_id: str, task: Mapping[str, Any]) -> bool:
+        """``awaiting_user`` 的审批卡：权限范围写在卡片正文，按钮回执直接续跑任务。"""
+        if self.db is None:
+            return False
+        task_id = _clean(task.get("id"), 64)
+        if not task_id:
+            return False
+        row = self.preferences.load(bot_id)
+        language = normalize_locale(self.locale_for(bot_id, row))
+        label = _task_label(task)
+        scope = task_scope(dict(task.get("profile") or {}))
+        title = render_copy("task_approval_title", {"task": label}, locale=language)
+        body = render_copy("task_approval_body", {"capability": label, "scope": scope}, locale=language)
+        fields = [
+            {"k": translate("admin", language, "orch_capability"), "v": label},
+            {"k": translate("admin", language, "orch_timeout"),
+             "v": f"{_number(task.get('timeout_seconds'), 0.0):.0f} s"},
+            {"k": "ID", "v": task_id, "mono": True},
+        ]
+        try:
+            card, frame = task_approval_card(
+                task,
+                title=_clean(title, 120),
+                body=_clean(body, 2000),
+                fields=fields,
+                scope=scope,
+                approve_label=translate("admin", language, "orch_run"),
+                reject_label=translate("admin", language, "orch_cancel"),
+                ttl_seconds=CARD_TTL_SECONDS,
+                visible_text=_clean(title, 120),
+            )
+        except Exception as exc:  # noqa: BLE001 - 帧造不出来就如实失败，账本里仍有任务行
+            self._fail("task_approval_card", exc, bot_id=bot_id)
+            return False
+        target = self.owner_chat(bot_id)
+        if not target:
+            self._audit("card", "task_card_not_pushed", bot_id=bot_id, level="warn",
+                        detail=f"未配置主人会话，任务 {task_id} 的审批卡无处可发")
+            return False
+        if not await self._send(bot_id, target, frame):
+            return False
+        self._task_cards[task_id] = _clean(card.get("id"), 64)
+        self._counts["task_cards"] += 1
+        self._audit("card", "task_approval_pushed", bot_id=bot_id, chat_ref=target,
+                    detail=f"{task_id} {label}", data={"task_id": task_id, "capability": label})
+        return True
+
+    async def _push_task_result(self, bot_id: str, task: Mapping[str, Any]) -> bool:
+        """任务落定后把当初那张审批卡就地改写成结果卡。
+
+        只有推过审批卡的任务才发结果卡：后台派发与扇出本来就不产生气泡，结果在任务
+        账本（``GET /api/v1/tasks/<id>``）里查，不拿聊天窗口当流水线。
+        """
+        task_id = _clean(task.get("id"), 64)
+        card_id = self._task_cards.pop(task_id, "") if task_id else ""
+        if not task_id or not card_id:
+            return False
+        row = self.preferences.load(bot_id)
+        language = normalize_locale(self.locale_for(bot_id, row))
+        label = _task_label(task)
+        mode = _clean(task.get("retention_mode"), 32) or "user_owned"
+        summary = task_result_summary(task)
+        outcome = _clean(task.get("outcome"), 16) or "pending"
+        if outcome == "succeeded":
+            # 成功结果的第二行永远说明留存去向：零留存时正文就是那句「结果未落盘」，
+            # 因为落库内容早已被抹成 redacted，没有任何摘要可展示。
+            sentence = render_copy(
+                "retention_zero" if mode == "zero_retention"
+                else "retention_ephemeral" if mode == "ephemeral"
+                else "retention_user_owned",
+                {"task": label},
+                locale=language,
+            )
+            body = f"{summary}\n{sentence}" if summary else sentence
+        else:
+            body = summary or _clean(task.get("error_code"), 40) or _clean(task.get("status"), 32)
+        title = render_copy("task_result_title", {"outcome": outcome.upper(), "task": label}, locale=language)
+        fields = [
+            {"k": translate("admin", language, "orch_capability"), "v": label},
+            {"k": translate("admin", language, "orch_latency"),
+             "v": f"{_number(task.get('latency_ms'), 0.0):.0f} ms"},
+            {"k": "ID", "v": task_id, "mono": True},
+        ]
+        try:
+            _card, frame = task_result_card(
+                task,
+                title=_clean(title, 120),
+                body=_clean(body, 2000),
+                summary=summary,
+                fields=fields,
+                latency_ms=_number(task.get("latency_ms"), 0.0),
+                card_id=card_id,
+                update=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._fail("task_result_card", exc, bot_id=bot_id)
+            return False
+        target = self.owner_chat(bot_id)
+        if not target or not await self._send(bot_id, target, frame):
+            return False
+        self._counts["task_cards"] += 1
+        self._audit("card", "task_result_pushed", bot_id=bot_id, chat_ref=target,
+                    detail=f"{task_id} {outcome}", data={"task_id": task_id, "status": _clean(task.get("status"), 32)})
+        return True
+
+    async def push_task_progress(
+        self,
+        bot_id: str,
+        task_id: str,
+        *,
+        step: int = 0,
+        total: int = 0,
+        percent: int = 0,
+        label: str = "",
+        title: str = "",
+        body: str = "",
+        chat_ref: str = "",
+    ) -> bool:
+        """进度卡：宿主按里程碑主动调用；每一帧都是新气泡，频率由宿主控制。"""
+        if self.db is None:
+            return False
+        task = self.db.get_task(_clean(task_id, 64))
+        if task is None or str(task.get("origin_bot_id")) != str(bot_id):
+            return False
+        row = self.preferences.load(bot_id)
+        language = normalize_locale(self.locale_for(bot_id, row))
+        capability = _task_label(task)
+        try:
+            step, total, percent = max(0, int(step)), max(0, int(total)), max(0, min(int(percent), 100))
+        except (TypeError, ValueError):
+            step = total = percent = 0
+        if not percent and total:
+            percent = min(100, int(round(step * 100.0 / total)))
+        heading = _clean(title, 120) or render_copy("task_progress_title", {"task": capability}, locale=language)
+        text = _clean(body, 2000) or render_copy(
+            "task_progress_body",
+            {"label": _clean(label, 80) or capability, "step": step, "total": total, "percent": percent},
+            locale=language,
+        )
+        try:
+            card, frame = task_progress_card(
+                task,
+                title=_clean(heading, 120),
+                body=text,
+                progress={"step": step, "total": total, "percent": percent, "label": _clean(label, 80)},
+                visible_text=_clean(heading, 120),
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._fail("task_progress_card", exc, bot_id=bot_id)
+            return False
+        target = self.owner_chat(bot_id) if not chat_ref else self._owner_ref(chat_ref)
+        if not target or not await self._send(bot_id, target, frame):
+            return False
+        self._task_cards[str(task.get("id"))] = _clean(card.get("id"), 64)
+        self._counts["task_cards"] += 1
+        self._audit("card", "task_progress_pushed", bot_id=bot_id, chat_ref=target,
+                    detail=f"{task.get('id')} {percent}%", data={"task_id": str(task.get("id")), "percent": percent})
+        return True
+
+    async def push_task_choice(
+        self,
+        bot_id: str,
+        task_id: str,
+        *,
+        question: str = "",
+        options: Sequence[Mapping[str, Any]] = (),
+        multi: bool = False,
+        title: str = "",
+        chat_ref: str = "",
+    ) -> bool:
+        """多选/单选卡：每个选项一个 ``ppxalt_<task_id>.<option>`` 回执，最多 4 个。"""
+        if self.db is None:
+            return False
+        task = self.db.get_task(_clean(task_id, 64))
+        if task is None or str(task.get("origin_bot_id")) != str(bot_id):
+            return False
+        row = self.preferences.load(bot_id)
+        language = normalize_locale(self.locale_for(bot_id, row))
+        capability = _task_label(task)
+        wanted = [dict(item) for item in options or () if isinstance(item, Mapping)]
+        labels = [_clean(item.get("label") or item.get("title"), 80) for item in wanted]
+        heading = _clean(title, 120) or render_copy("task_choice_title", {"task": capability}, locale=language)
+        text = render_copy(
+            "task_choice_body",
+            {"question": _clean(question, 240) or heading, "options": " / ".join(item for item in labels if item) or "-"},
+            locale=language,
+        )
+        try:
+            card, frame = task_choice_card(
+                task,
+                title=_clean(heading, 120),
+                body=_clean(text, 2000),
+                question=_clean(question, 240) or heading,
+                options=wanted,
+                multi=multi,
+                visible_text=_clean(heading, 120),
+            )
+        except Exception as exc:  # noqa: BLE001 - 选项超限等一律如实失败
+            self._fail("task_choice_card", exc, bot_id=bot_id)
+            return False
+        target = self.owner_chat(bot_id) if not chat_ref else self._owner_ref(chat_ref)
+        if not target or not await self._send(bot_id, target, frame):
+            return False
+        self._task_cards[str(task.get("id"))] = _clean(card.get("id"), 64)
+        self._counts["task_cards"] += 1
+        self._audit("card", "task_choice_pushed", bot_id=bot_id, chat_ref=target,
+                    detail=f"{task.get('id')} {len(wanted)} options",
+                    data={"task_id": str(task.get("id")), "options": labels, "multi": bool(multi)})
+        return True
+
+    async def handle_task_callback(self, bot_id: str, kind: str, ref: str, *, chat_ref: str = "") -> str:
+        """任务卡片的回执：``ppxok/ppxno_tk_…`` 续跑或拒绝，``ppxalt_tk_….opt`` 只记录选择。
+
+        成功路径刻意返回空字符串：按钮点下后卡片会就地改写成结果卡，再冒一条回复气泡
+        只会重复同一件事。所有路径都写审计，错点、过期点都能在账本里查到。
+        """
+        if self.db is None:
+            return ""
+        head, _, option = ref.partition(".")
+        task = self.db.get_task(_clean(head, 64))
+        if task is None or str(task.get("origin_bot_id")) != str(bot_id):
+            self._audit("card", "task_callback_unknown", bot_id=bot_id, level="warn", chat_ref=chat_ref,
+                        detail=f"回执指向未知任务 {_clean(head, 40)}")
+            return ""
+        task_id = str(task.get("id"))
+        if kind == CALLBACK_ALT:
+            if not option:
+                self._audit("card", "task_choice_unknown", bot_id=bot_id, level="warn", chat_ref=chat_ref,
+                            detail=task_id)
+                return ""
+            self._counts["task_choices"] += 1
+            self._audit("lifecycle", "task_choice", bot_id=bot_id, chat_ref=chat_ref,
+                        detail=f"{task_id}.{_clean(option, 32)}",
+                        data={"task_id": task_id, "option": _clean(option, 32)})
+            return ""
+        if str(task.get("status")) != "awaiting_user":
+            self._audit("card", "task_callback_stale", bot_id=bot_id, level="warn", chat_ref=chat_ref,
+                        detail=f"{task_id} {task.get('status')}")
+            return ""
+        orchestrator = self._task_orchestrator
+        if orchestrator is None:
+            self._fail("task_callback", OrchestratorError("not_found", "编排器未接上"), bot_id=bot_id)
+            return ""
+        approved = kind == CALLBACK_APPROVE
+        try:
+            settled = await orchestrator.resolve_approval(task_id, approved)
+        except OrchestratorError as exc:
+            self._audit("lifecycle", "task_approval_failed", bot_id=bot_id, level="warn", chat_ref=chat_ref,
+                        detail=f"{task_id} {exc.code}")
+            return ""
+        self._counts["task_approvals" if approved else "task_declines"] += 1
+        self._audit("lifecycle", "task_approved" if approved else "task_declined", bot_id=bot_id,
+                    chat_ref=chat_ref, detail=f"{task_id} {settled.get('status')}",
+                    data={"task_id": task_id, "status": settled.get("status")})
+        return ""
+
+    def cleanup_task_workspace(self, task: Mapping[str, Any]) -> Dict[str, Any]:
+        """编排器的清理回调：删目标 Bot 的 ``task-scratch/<task_id>``，只碰这一个子目录。
+
+        同步、幂等（目录不在就返回 ``absent``）；任何越界形状（非法 id、符号链接指向
+        别处）一律拒绝删除，并在返回值里说明原因 —— 编排器会把它写进 ``cleanup_detail``。
+        """
+        task_id = str(task.get("id") or "")
+        bot_id = str(task.get("target_bot_id") or "")
+        if not re.fullmatch(r"tk_[0-9a-f]{12}", task_id):
+            return {"removed": False, "reason": "bad_task_id"}
+        if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}", bot_id):
+            return {"removed": False, "reason": "bad_bot_id"}
+        try:
+            root = BotPaths.for_bot(self.settings, bot_id).root.resolve()
+            scratch_root = (root / TASK_SCRATCH_DIR).resolve()
+            scratch = (scratch_root / task_id).resolve()
+        except (OSError, ValueError):
+            return {"removed": False, "reason": "unresolvable"}
+        if scratch.parent != scratch_root or scratch == scratch_root:
+            return {"removed": False, "reason": "unsafe_path"}
+        if not scratch.is_dir():
+            return {"removed": False, "reason": "absent"}
+        try:
+            shutil.rmtree(scratch)
+        except OSError as exc:
+            return {"removed": False, "reason": f"error:{type(exc).__name__}"}
+        return {"removed": True, "path": f"{TASK_SCRATCH_DIR}/{task_id}"}
 
     async def deliver_invite(self, bot_id: str, proposal: Mapping[str, Any]) -> bool:
         """把 .ics 邀请写进该 Bot 自己的 files 目录并发给对方（通道 A 与通道 B 共用）。"""
@@ -1578,11 +2076,14 @@ class AgentRuntime:
             "owner_chat": self.owner_chat(bot_id),
             "locale": self.locale_for(bot_id, row),
             "timezone": self.zone_for(bot_id, row),
+            "execution": self.execution_profile(bot_id),
             "preferences": self.preferences.summary(bot_id),
             "peers": [peer.as_dict() for peer in sorted(self.load_peers(bot_id).values(), key=lambda row: row.identity)],
             "proposals": self.db.proposal_stats(bot_id) if self.db is not None else {},
             "negotiations": self.db.negotiation_stats(bot_id) if self.db is not None else {},
             "links": self.db.link_stats(bot_id) if self.db is not None else {},
+            "tasks": self.db.task_stats(bot_id) if self.db is not None else {},
+            "task_cards": sorted(self._task_cards),
         }
 
     # ---------------------------------------------------------------- 记账
@@ -1705,6 +2206,7 @@ __all__ = [
     "AgentRuntime",
     "CARD_TTL_SECONDS",
     "DEFAULT_CONFIG",
+    "ExecutionProfile",
     "GET_AVAILABILITY",
     "PLUGIN_ID",
     "PROPOSE_CANCEL",
@@ -1713,9 +2215,13 @@ __all__ = [
     "Peer",
     "SUMMARIZE_FILE",
     "SlotResult",
+    "TASK_REF_PREFIX",
+    "TASK_SCRATCH_DIR",
     "TOOL_NAMES",
     "build_sender",
     "slot_line",
     "summarize_workspace_file",
+    "task_result_summary",
+    "task_scope",
     "write_ics",
 ]

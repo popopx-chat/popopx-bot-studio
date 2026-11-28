@@ -21,7 +21,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .config import SECURE_FILE_MODE
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _ID_RE = re.compile(r"^[a-z0-9_-]{3,64}$")
 TRIGGER_TYPES = ("exact", "prefix", "regex", "default")
@@ -36,17 +36,27 @@ PROPOSAL_SOURCES = ("a2a", "guest", "direct", "operator")
 NEGOTIATION_STATUSES = ("open", "converged", "rejected", "expired", "aborted")
 GUEST_LINK_STATUSES = ("active", "exhausted", "revoked", "expired")
 GUEST_ROLES = ("visitor", "bot", "owner")
-#: 跨 Agent 编排的任务状态机：``queued → running → succeeded|failed|timeout|cancelled``，
-#: ``refused`` 是策略闸在派发前就落定的终态（无授权、目标不在线、跳数或并发超预算）。
+#: 跨 Agent 编排的任务生命周期（schema v7）：``created → authorized → scheduled →
+#: allocated → running → awaiting_user → completed → workspace_cleanup``。成功终态是
+#: ``workspace_cleanup``（执行完成且清理回调已跑）；``failed`` / ``cancelled`` 是失败与
+#: 取消终态。``refused`` 保留为策略闸在派发前就落定的终态（无授权、跳数/成环、并发超预算），
+#: 使"被哪条闸挡下"在账本里始终是一个完整状态而不是一条错误码。
 TASK_STATUSES = (
-    "queued",
+    "created",
+    "authorized",
+    "scheduled",
+    "allocated",
     "running",
-    "succeeded",
+    "awaiting_user",
+    "completed",
+    "workspace_cleanup",
     "failed",
-    "timeout",
-    "refused",
     "cancelled",
+    "refused",
 )
+#: 任务结果的留存模式。``zero_retention`` 的结果在落库前被抹除，``ephemeral`` 随任务
+#: 结束失效，``user_owned`` 留在主人自己的工作区。
+RETENTION_MODES = ("zero_retention", "ephemeral", "user_owned")
 #: 授权范围里 ``capability`` 允许的通配值：一条授权覆盖全部已注册能力。
 GRANT_WILDCARD = "*"
 GRANT_CAPABILITY_RE = re.compile(r"^[a-z][a-z0-9_.\-]{2,63}$")
@@ -426,6 +436,72 @@ _MIGRATIONS: Tuple[Tuple[int, str, Tuple[str, ...]], ...] = (
             "CREATE INDEX IF NOT EXISTS idx_negotiation_audit_proposal ON negotiation_audit (proposal_id, ts)",
             "CREATE INDEX IF NOT EXISTS idx_negotiation_audit_correlation "
             "ON negotiation_audit (correlation_id, ts)",
+        ),
+    ),
+    (
+        7,
+        "任务生命周期：11 态状态机、执行画像、审批与工作区清理",
+        (
+            "ALTER TABLE agent_task_grants ADD COLUMN require_approval INTEGER NOT NULL DEFAULT 0",
+            "DROP TABLE IF EXISTS agent_tasks_v7",
+            """
+            CREATE TABLE agent_tasks_v7 (
+                id TEXT PRIMARY KEY,
+                correlation_id TEXT NOT NULL,
+                parent_id TEXT NOT NULL DEFAULT '',
+                origin_bot_id TEXT NOT NULL,
+                target_bot_id TEXT NOT NULL,
+                capability TEXT NOT NULL,
+                args_json TEXT NOT NULL DEFAULT '{}',
+                profile_json TEXT NOT NULL DEFAULT '{}',
+                status TEXT NOT NULL CHECK (status IN
+                    ('created','authorized','scheduled','allocated','running','awaiting_user',
+                     'completed','workspace_cleanup','failed','cancelled','refused')),
+                retention_mode TEXT NOT NULL DEFAULT '',
+                approval_required INTEGER NOT NULL DEFAULT 0,
+                approved_at REAL NOT NULL DEFAULT 0,
+                result_json TEXT NOT NULL DEFAULT '',
+                error_code TEXT NOT NULL DEFAULT '',
+                detail TEXT NOT NULL DEFAULT '',
+                hops INTEGER NOT NULL DEFAULT 1,
+                timeout_seconds REAL NOT NULL DEFAULT 20,
+                created_at REAL NOT NULL,
+                started_at REAL NOT NULL DEFAULT 0,
+                finished_at REAL NOT NULL DEFAULT 0,
+                cleanup_at REAL NOT NULL DEFAULT 0,
+                cleanup_detail TEXT NOT NULL DEFAULT '',
+                latency_ms REAL NOT NULL DEFAULT 0
+            )
+            """,
+            # 旧七个状态逐一映射：queued→scheduled、succeeded→completed、timeout→failed
+            # （error_code 补成 timeout），其余原样 —— 历史行的语义一条都不丢。
+            """
+            INSERT INTO agent_tasks_v7 (id, correlation_id, parent_id, origin_bot_id,
+                target_bot_id, capability, args_json, profile_json, status, retention_mode,
+                approval_required, approved_at, result_json, error_code, detail, hops,
+                timeout_seconds, created_at, started_at, finished_at, cleanup_at,
+                cleanup_detail, latency_ms)
+            SELECT id, correlation_id, parent_id, origin_bot_id, target_bot_id,
+                capability, args_json, '{}',
+                CASE status
+                    WHEN 'queued' THEN 'scheduled'
+                    WHEN 'succeeded' THEN 'completed'
+                    WHEN 'timeout' THEN 'failed'
+                    ELSE status
+                END,
+                '', 0, 0, result_json,
+                CASE WHEN status = 'timeout' AND error_code = '' THEN 'timeout' ELSE error_code END,
+                detail, hops, timeout_seconds, created_at, started_at, finished_at, 0, '',
+                latency_ms
+            FROM agent_tasks
+            """,
+            "DROP TABLE agent_tasks",
+            "ALTER TABLE agent_tasks_v7 RENAME TO agent_tasks",
+            "CREATE INDEX IF NOT EXISTS idx_agent_tasks_origin ON agent_tasks (origin_bot_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_agent_tasks_parent ON agent_tasks (parent_id)",
+            "CREATE INDEX IF NOT EXISTS idx_agent_tasks_correlation "
+            "ON agent_tasks (correlation_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_agent_tasks_target ON agent_tasks (target_bot_id, status)",
         ),
     ),
 )
@@ -1931,10 +2007,13 @@ class Database:
         max_concurrent: int = 4,
         timeout_seconds: float = 20.0,
         enabled: bool = True,
+        require_approval: bool = False,
     ) -> Dict[str, Any]:
         """写入或更新一条跨 Agent 派活授权；同 (origin,target,capability) 幂等覆盖。
 
         授权是**默认拒绝**的：没有这行，编排层一律 ``refused``，不存在"没配就等于能派"。
+        ``require_approval`` 让该授权下的任务在 ``running`` 前先停在 ``awaiting_user``，
+        等主人批准后才继续 —— 它是额外的闸，不是放行券：批准也绕不过授权本身。
         """
         origin = _require_agent_id(origin_bot_id, "origin_bot_id")
         target = _require_agent_id(target_bot_id, "target_bot_id")
@@ -1942,6 +2021,7 @@ class Database:
         hops = max(1, min(int(max_hops), MAX_TASK_HOPS))
         concurrent = max(1, min(int(max_concurrent), MAX_TASK_CONCURRENCY))
         seconds = _clamp_task_timeout(timeout_seconds)
+        approval = 1 if require_approval else 0
         moment = time.time()
         with self._lock:
             existing = self.conn.execute(
@@ -1953,18 +2033,31 @@ class Database:
                 cursor = self.conn.execute(
                     """
                     INSERT INTO agent_task_grants (origin_bot_id, target_bot_id, capability,
-                        max_hops, max_concurrent, timeout_seconds, enabled, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        max_hops, max_concurrent, timeout_seconds, enabled, require_approval,
+                        created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (origin, target, scope, hops, concurrent, seconds, 1 if enabled else 0, moment, moment),
+                    (
+                        origin,
+                        target,
+                        scope,
+                        hops,
+                        concurrent,
+                        seconds,
+                        1 if enabled else 0,
+                        approval,
+                        moment,
+                        moment,
+                    ),
                 )
                 grant_id = int(cursor.lastrowid or 0)
             else:
                 grant_id = int(existing["id"])
                 self.conn.execute(
                     "UPDATE agent_task_grants SET max_hops = ?, max_concurrent = ?, "
-                    "timeout_seconds = ?, enabled = ?, updated_at = ? WHERE id = ?",
-                    (hops, concurrent, seconds, 1 if enabled else 0, moment, grant_id),
+                    "timeout_seconds = ?, enabled = ?, require_approval = ?, updated_at = ? "
+                    "WHERE id = ?",
+                    (hops, concurrent, seconds, 1 if enabled else 0, approval, moment, grant_id),
                 )
         row = self.get_grant(grant_id)
         if row is None:
@@ -2050,20 +2143,26 @@ class Database:
         capability: str,
         parent_id: str = "",
         args: Optional[Dict[str, Any]] = None,
-        status: str = "queued",
+        status: str = "created",
         hops: int = 1,
         timeout_seconds: float = 20.0,
+        profile: Optional[Dict[str, Any]] = None,
+        retention_mode: str = "",
+        approval_required: bool = False,
     ) -> Dict[str, Any]:
         if status not in TASK_STATUSES:
             raise LedgerError(f"非法任务状态 {status!r}")
+        if retention_mode and retention_mode not in RETENTION_MODES:
+            raise LedgerError(f"非法留存模式 {retention_mode!r}")
         task_id = new_task_id()
         moment = time.time()
         with self._lock:
             self.conn.execute(
                 """
                 INSERT INTO agent_tasks (id, correlation_id, parent_id, origin_bot_id, target_bot_id,
-                    capability, args_json, status, hops, timeout_seconds, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    capability, args_json, profile_json, status, retention_mode, approval_required,
+                    hops, timeout_seconds, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task_id,
@@ -2073,7 +2172,10 @@ class Database:
                     _require_agent_id(target_bot_id, "target_bot_id"),
                     _require_capability(capability),
                     _json_dump(args or {}, label="任务入参"),
+                    _json_dump(profile or {}, label="执行画像"),
                     status,
+                    retention_mode,
+                    1 if approval_required else 0,
                     max(1, min(int(hops), MAX_TASK_HOPS)),
                     _clamp_task_timeout(timeout_seconds),
                     moment,
@@ -2109,6 +2211,9 @@ class Database:
             "finished_at",
             "latency_ms",
             "args_json",
+            "approved_at",
+            "cleanup_at",
+            "cleanup_detail",
         }
         unknown = set(fields) - allowed
         if unknown:
@@ -2161,8 +2266,15 @@ class Database:
         return [_task_record(row) for row in rows]
 
     def count_active_tasks(self, target_bot_id: str, capability: Optional[str] = None) -> int:
-        """并发预算的计数口径只算 running —— queued 不占额度，否则自我饿死。"""
-        sql = "SELECT COUNT(*) FROM agent_tasks WHERE target_bot_id = ? AND status = 'running'"
+        """并发预算口径：``running`` 与 ``awaiting_user`` 都占额度。
+
+        等审批的任务并没有释放它持有的分配，若不计入，一个挂起任务就能靠"再派一个"绕过
+        ``max_concurrent``。``created``/``scheduled`` 等尚未占位的状态不计。
+        """
+        sql = (
+            "SELECT COUNT(*) FROM agent_tasks WHERE target_bot_id = ? "
+            "AND status IN ('running', 'awaiting_user')"
+        )
         params: List[Any] = [target_bot_id]
         if capability is not None:
             sql += " AND capability = ?"
@@ -2255,12 +2367,32 @@ def _clamp_task_timeout(value: Any) -> float:
 
 
 def _task_record(row: Any) -> Dict[str, Any]:
-    """行 → 对外记录。两个 JSON 列在这里解码，其余列原样带出。"""
+    """行 → 对外记录。两个 JSON 列在这里解码，并派生 ``outcome``。
+
+    ``outcome`` 把 11 个存储状态收敛成调用方关心的四值结果：
+    ``completed``/``workspace_cleanup`` → ``succeeded``；``failed``/``refused`` →
+    ``failed``；``cancelled`` → ``cancelled``；其余（进行中、等审批）→ ``pending``。
+    存储状态保留"卡在哪一步"，``outcome`` 回答"最后成没成"，二者不互相顶替。
+    """
     record = dict(row)
     record["args"] = _json_load(record.pop("args_json", ""), {})
+    record["profile"] = _json_load(record.pop("profile_json", ""), {})
     raw = record.pop("result_json", "") or ""
     record["result"] = _json_load(raw, {}) if raw else {}
+    record["approval_required"] = bool(record.get("approval_required"))
+    record["outcome"] = task_outcome(str(record.get("status") or ""))
     return record
+
+
+def task_outcome(status: str) -> str:
+    """存储状态 → 派生结果（见 :func:`_task_record`）。未知状态按 ``pending`` 处理。"""
+    if status in ("completed", "workspace_cleanup"):
+        return "succeeded"
+    if status in ("failed", "refused"):
+        return "failed"
+    if status == "cancelled":
+        return "cancelled"
+    return "pending"
 
 
 def _negotiation_record(row: Any) -> Dict[str, Any]:

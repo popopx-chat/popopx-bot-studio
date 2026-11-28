@@ -15,7 +15,7 @@
   `/usr/local/bin/popopx-cli`，或用 `--no-node-download` 完全跳过。
 - 模型零下载：`needle3.cact`（33.7 MiB，<50 MB）随仓库内置，加载前做 SHA-256 完整性校验，
   部署启动后即刻可用；没有 C 运行时或 SDK 时自动退回本仓自带的确定性抽取器（第 5 节）。
-- 自检门禁：`python3 -m app.main --self-test` → **26 组 / 8287 条真实断言 / 0 失败 / 约 20.4 秒 / 退出码 0**，
+- 自检门禁：`python3 -m app.main --self-test` → **26 组 / 10572 条真实断言 / 0 失败 / 约 18.9 秒 / 退出码 0**，
   只依赖 `studio/tests/fake_popopx_cli.py`（同样讲真协议、且把 profile 存在 `bot_chat.db` 里的有状态替身），不联网、不连 SMP。
 
 English document: [`README.en.md`](README.en.md)
@@ -31,13 +31,13 @@ English document: [`README.en.md`](README.en.md)
 │ POPOPX Bot Studio (Python 3.11 + FastAPI, 单进程)                  │
 │  main.py        路由、鉴权、生命周期                                            │
 │  config.py      .env / 环境变量 / 权限校验（0700·0600）                          │
-│  database.py    SQLite(WAL) 账本 + schema_migrations（当前 v6）                 │
+│  database.py    SQLite(WAL) 账本 + schema_migrations（当前 v7）                 │
 │  bot_supervisor.py  每 Bot 独立数据目录 + 回环端口 + 包装脚本 + 重连退避          │
 │  ws_protocol.py 与 popopx-cli 的行协议帧、/_address /_create /_send 等指令       │
 │  gateway.py     入站事件 → 规则/路由/插件 → 出站发送，更新缓冲（≤500 条）         │
 │  rule_engine.py 自动回复（exact / prefix / regex / default）                    │
 │  router_engine.py 关键词路由与工单转接                                          │
-│  orchestrator.py 跨 Agent 任务编排：本地授权、超时熔断、扇出聚合、审计回放       │
+│  orchestrator.py 11 态任务生命周期、审批闸、执行画像、扇出聚合、审计回放         │
 │  orchestrator_local.py 只读能力投影（回复/路由/忙闲/摘要/画像），按目标 Bot 隔离 │
 │  plugin_manager.py 插件总线：发现、生命周期、隔离派发、脱敏配置                   │
 │  open_api.py    Telegram 风格开发者 API（/getMe /sendMessage …）                │
@@ -47,7 +47,7 @@ English document: [`README.en.md`](README.en.md)
 │  needle3_runtime.py 端侧小引擎（只抽取 5 个工具调用）+ 确定性回退抽取器          │
 │  needle_assets.py   内置权重的发现与 SHA-256 门禁，运行期零下载                 │
 │  agent_preferences.py 每 Bot 的偏好规则：工作时间/缓冲/屏蔽段/关键词/协商策略   │
-│  agent_copy.py      12 类话术 × 21 语种目录 + 占位符/文字族完整性门禁           │
+│  agent_copy.py      22 类话术 × 21 语种目录 + 占位符/文字族完整性门禁           │
 │  reasoner_bridge.py 大模型只写话术（Ollama / OpenAI 兼容，严格回环或 https）     │
 │  mac_node_bridge.py 本机 Mac Node 桥：状态、忙闲读取、approve 落库              │
 │  eco_cards.py       ::POPOPX_ECO:: 确认卡片与 ::CB:: 回执的编解码               │
@@ -305,8 +305,32 @@ HTML 转义，21 语种文案齐全且占位符完全一致，阿拉伯语页面
 * **边界**：跳数上限 3（沿 `parent_id` 回溯，成环即拒）、并发上限 32、单任务超时
   0.5–300 秒（`asyncio.wait_for` 熔断），扇出目标先去重、最多 8 个，用
   `shield(gather(...))` 保证部分成功照常聚合、不因一个失败丢掉其余结果。
-* **审计与回放**：每次派发都在 `agent_tasks` 落一行，状态机为
-  `queued/running/succeeded/failed/timeout/refused/cancelled`，带 `correlation_id`、耗时、
+* **11 态生命周期**：`created → authorized → scheduled → allocated → running →
+  awaiting_user → completed → workspace_cleanup`，另有失败侧 `failed` / `cancelled` /
+  `refused` 三个终态。存储状态只回答「卡在哪一步」，派生 `outcome` 才回答「最后成没成」
+  （`succeeded` / `failed` / `cancelled` / `pending`）：成功终态统一收在 `workspace_cleanup`，
+  无论从哪条终态收口都同步触发一次工作区清理回调，摘要落 `cleanup_detail`，清理失败只记录、
+  绝不改判结果；真实装配栈把它接到 Mac Node 的 `task-scratch/<task_id>` 目录。
+* **执行画像**：每个 Bot 一份 `ExecutionProfile`（`agent_runtime.py`，由
+  `orchestrator.normalize_profile` 统一收敛）：算力（偏好节点、`process|sandbox` 隔离、
+  0.5–300 秒运行上限）、隐私（`zero_retention|ephemeral|user_owned` 留存模式、写记忆是否
+  需审批）、权限白名单（文件/浏览器/网络）。画像只收紧不放宽：运行上限与授权超时取更小者；
+  `zero_retention` 在落库前就把结果换成 `{"redacted": true}`，`ephemeral` 在清理时抹除结果
+  正文并留 `;result_purged` 痕迹；未知枚举、越界数字、伪布尔一律夹回保守默认。
+* **审批闸**：授权行 `require_approval` 或目标 Bot 画像的 `memory_write_approval` 任一为真，
+  任务在 `running` 之后停在 `awaiting_user` 并继续占用并发额度；主人批准则原地续跑，
+  拒绝落 `cancelled/declined`，挂起中也可直接取消。审批只是**额外的**人工闸，绝不绕过授权：
+  没有授权行的任务连挂起的机会都没有，直接 `refused/no_grant`。
+* **任务卡片**：`agent_task_cards.py` 在标准 `::POPOPX_ECO::` `sc` 卡片的 JSON 顶层附带一个
+  `task` 扩展对象（协议 `popopx.agent.task.v1`）：进度条、带权限范围的审批（批准/拒绝）、
+  多选选择卡与结果摘要（含 `retention_mode` 标签），同时保留完整本地化的 `fields/actions`
+  兜底，老客户端照旧渲染；回执回调为 `::CB::ppxok_<task_id>` / `::CB::ppxno_<task_id>` 与
+  `::CB::ppxalt_<task_id>.<option>`，状态更新帧只带 `m:"u"` 不带可见正文。
+* **任务 API**：控制台与客户端共用四个稳定端点 —— `POST /api/v1/tasks`、
+  `GET /api/v1/tasks/{task_id}`（行 + 子任务）、`POST /api/v1/tasks/{task_id}/approve`、
+  `POST /api/v1/tasks/{task_id}/cancel`，全部走同一圈鉴权与同一本账，被策略拒绝是
+  `200 + refused 行`，不是 HTTP 错误。
+* **审计与回放**：每次派发都在 `agent_tasks` 落一行，带 `correlation_id`、耗时、
   结果摘要与拒绝原因；子任务沿用父任务的关联号，所以 `orch/replay` 能拼出整棵任务树，
   控制台「多 Agent 编排」面板据此画时间线与树。硬删除 Bot 时授权与任务一并失效，投影立刻报
   `unknown_target`。
@@ -365,7 +389,7 @@ HTML 转义，21 语种文案齐全且占位符完全一致，阿拉伯语页面
   占位符 `{bot_name}` 等在此展开。
 - `--self-test` 的 `i18n` 分组断言每个语种与 `en` 的键集合 100% 对齐、占位符无漂移、
   无空词条，并提供 `/api/admin/i18n/parity` 在线自检。
-- 替身机器人另有一套独立话术目录：`agent_copy.py` 的 12 类话术 × 21 语种，键集、占位符集合、
+- 替身机器人另有一套独立话术目录：`agent_copy.py` 的 22 类话术 × 21 语种，键集、占位符集合、
   数字（时间窗/天数/时长都来自事实而非译文）与文字族（拉丁句里蹦出汉字即判定串语种）四项
   全部由 `agent_copy.assert_catalog()` 把门；访客页文案同样要求 21 语种齐全且占位符完全一致。
 - 窄屏与 RTL 另有一份可跳过的浏览器实测：`node studio/tests/narrow_layout_check.mjs`，
@@ -407,8 +431,8 @@ cd studio
 | 分组 | 断言 | 覆盖 |
 | --- | --- | --- |
 | `config` | 62 | 环境解析、回环约束、权限告警、Mac Node/话术端点非法值拒绝 |
-| `database` | 110 | 账本 CRUD、v1..v6 迁移、软删除、插件配置、提案/协商/访客表 |
-| `agent_ledger` | 139 | 提案与协商状态机持久化、审计写入、忙闲缓存、幂等 |
+| `database` | 110 | 账本 CRUD、v1..v7 迁移、软删除、插件配置、提案/协商/访客表 |
+| `agent_ledger` | 152 | 提案与协商状态机持久化、审计写入、忙闲缓存、幂等，以及 v7 的 11 态任务行与 v6 旧行逐条映射（含 11 态词表、派生 `outcome`、`timeout` 错误码补齐） |
 | `ws_protocol` | 103 | 行协议帧、指令语法、探活命令与错误帧唤醒、异常与超时 |
 | `supervisor` | 86 | 端口分配、隔离目录、包装脚本与首启名片、重连退避 |
 | `provisioning` | 74 | 建 Bot、`/_address`、名称与头像保留、复启与冷备复活幂等 |
@@ -421,7 +445,7 @@ cd studio
 | `i18n` | 444 | 21 语种完整性、RTL 元数据、协商、欢迎语、页面注入 |
 | `web_live` | 60 | 真实 ASGI 生命周期、WebSocket、冷备往返、隐私二维码 |
 | `invite_codec` | 121 | HKDF/ChaCha20 标准向量、service-suite 密钥与两条标准向量逐字节对齐、`URI_SCHEMES` 白名单（旧 `smp://` 向量拒绝解码/编码）、`/i/v1/` 路径主机校验、随机 nonce、明文不泄漏、篡改拒绝 |
-| `orchestration` | 260 | 进程内跨 Agent 派发的策略闸（默认拒绝、跳数、成环、并发）、超时熔断、异常脱敏、结果聚合与部分成功、取消、回放与任务树、`task_stats`，以及五个投影（profile/reply.compose/router/calendar mask/workspace.summarize）在真实装配栈上的非桩验证 |
+| `orchestration` | 398 | 进程内跨 Agent 派发的策略闸（默认拒绝、跳数、成环、并发）、11 态生命周期与派生 `outcome`、审批闸（批准续跑/拒绝/挂起取消）、执行画像（夹取、零留存/`ephemeral`、画像源故障降级）、工作区清理回调（映射/抛错/非映射、拒绝侧同样触发）、超时熔断、异常脱敏、结果聚合与部分成功、取消、回放与任务树、`task_stats`、四个 `/api/v1/tasks` 端点，以及五个投影（profile/reply.compose/router/calendar mask/workspace.summarize）在真实装配栈上的非桩验证 |
 | `qrcode_diag` | 129 | `/qrcode` 与 `/qr.png` 的 404/409/401 封套分家、2048 字节封装上限与 1663 字节二维码容量上限的边界、nonce 每次不同、`contact_address` 回落、`box` 参数夹住、落盘权限 0700/0600，以及控制台降级抽屉的装配顺序（先清残留→请求→409 仍开抽屉） |
 | `bundle` | 281 | 冷备导出/校验/篡改/跨账本迁移/幂等、CLI `invite` 与 `--raw-links` |
 | `eco_cards` | 89 | `::POPOPX_ECO::` 卡片与 `::CB::` 回执编解码、越界字段拒绝 |
@@ -430,9 +454,9 @@ cd studio
 | `mac_node` | 201 | 严格回环与 SSRF 阻断、`X-PPX-Token`、状态/忙闲/approve、超时与降级 |
 | `a2a` | 220 | 掩码投影、`FORBIDDEN_KEYS` 闸、HMAC 签名与重放、时区求交、状态机 |
 | `guest_portal` | 598 | 令牌签发/验签/过期/撤销/次数预算、并发领取、脱敏空档、.ics 门槛、页面转义与 RTL |
-| `agent_engine` | 3978 | Needle 3 抽取与确定性回退、权重 SHA-256 门禁、偏好规则、话术与推理桥降级、密钥卫生 |
-| `agent_console` | 390 | `/api/agent/*` 与 `/book/*` 路由、鉴权、面板数据结构、21 语种词条 |
-| 合计 | **8287** | 26/26 组 0 失败，退出码 0 |
+| `agent_engine` | 6108 | Needle 3 抽取与确定性回退、权重 SHA-256 门禁、偏好规则、22 类 × 21 语种话术、任务卡四型载荷与去重/回调、推理桥降级、密钥卫生 |
+| `agent_console` | 394 | `/api/agent/*` 与 `/book/*` 路由、鉴权、面板数据结构（含执行画像与任务段）、21 语种词条 |
+| 合计 | **10572** | 26/26 组 0 失败，退出码 0 |
 
 ## 10. 运维与安全注意
 

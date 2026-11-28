@@ -21,9 +21,18 @@
    一条 ``db.log_negotiation("orchestrator", ...)``，detail 只允许出现 id、计数和原因码 ——
    和 ``a2a`` 同一套纪律。派活的因果链按时间正序取回（:meth:`replay`）。
 
-熔断：``asyncio.wait_for`` 到点就断，被断的任务落在 ``timeout``，取消落在 ``cancelled``；
-``succeeded`` 之后不再迁移。跳数超预算、祖先链里出现自己（A→B→A）、目标并发额度占满，
+生命周期：``created → authorized → scheduled → allocated → running → completed →
+workspace_cleanup``，成功终态是 ``workspace_cleanup``（结果已落定、清理回调已跑）；
+``failed`` / ``cancelled`` / ``refused`` 是失败侧终态，``refused`` 专门表示策略闸在派发前就挡下。
+审批闸把任务从 ``running`` 挂到 ``awaiting_user``，批准后回到 ``running`` 继续，拒绝落在
+``cancelled``（``error_code='declined'``）。熔断：``asyncio.wait_for`` 到点就断，被断的任务落在
+``failed`` 且 ``error_code='timeout'``。每个终态都会触发一次工作区清理回调，结果记进
+``cleanup_detail``。跳数超预算、祖先链里出现自己（A→B→A）、目标并发额度占满，
 都在派发前掐掉，理由进审计。
+
+执行画像（:func:`normalize_profile`）只是**声明**：``compute.max_runtime_seconds`` 与授权
+超时取更小者，``privacy.retention_mode='zero_retention'`` 在结果落库前抹除正文，
+``permissions`` 只做校验与导出 —— 编排器不会借画像放宽任何既有闸。
 
 本模块不 import 网关，也不 import 监督器：能力由 :meth:`Orchestrator.register` 注入
 （见 :mod:`app.agent_runtime`），因此自检可以直接塞假能力进来跑状态机。
@@ -34,6 +43,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import math
 import re
 import time
 from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -42,6 +52,7 @@ from .database import (
     GRANT_WILDCARD,
     MAX_TASK_CONCURRENCY,
     MAX_TASK_HOPS,
+    RETENTION_MODES,
     TASK_RESULT_MAX_CHARS,
     TASK_TIMEOUT_MAX_SECONDS,
     TASK_TIMEOUT_MIN_SECONDS,
@@ -63,8 +74,10 @@ REASONS = (
     "bad_args",
     "timeout",
     "cancelled",
+    "declined",
     "executor_error",
     "not_cancellable",
+    "not_awaiting",
     "no_targets",
     "fanout_limit",
     "not_found",
@@ -79,6 +92,19 @@ ARG_INT_MIN, ARG_INT_MAX = 0, 400
 FANOUT_MAX_DEFAULT = 8
 #: 扇出的整体预算上限。单个子任务另有自己的授权超时，两层各管各的。
 FANOUT_BUDGET_MAX_SECONDS = 900.0
+
+#: 执行画像的隔离模式。``process`` = 独立 CLI 沙箱进程，``sandbox`` = 目标 Bot 自己的沙箱。
+ISOLATION_MODES = ("process", "sandbox")
+DEFAULT_MAX_RUNTIME_SECONDS = 120.0
+MIN_RUNTIME_SECONDS = TASK_TIMEOUT_MIN_SECONDS
+MAX_RUNTIME_SECONDS = TASK_TIMEOUT_MAX_SECONDS
+
+#: 仍在生命周期内的状态。取消只对这些开口；清理只对 :data:`TERMINAL_STATUSES` 触发。
+ACTIVE_STATUSES = ("created", "authorized", "scheduled", "allocated", "running", "awaiting_user")
+TERMINAL_STATUSES = ("workspace_cleanup", "failed", "cancelled", "refused")
+
+PROFILE_FIELD_MAX = 64
+PROFILE_LIST_MAX = 32
 
 #: 内置能力的入参规格。``required`` 缺一项就是 ``bad_args``，多一项未知键也是 ——
 #: 未知键往往意味着调用方拼错了名字，静默吞掉只会让结果看着像"它真的这么回"。
@@ -217,6 +243,62 @@ def validate_args(capability: str, args: Optional[Mapping[str, Any]]) -> Dict[st
     return out
 
 
+def _profile_list(value: Any) -> List[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    out: List[str] = []
+    for item in value[:PROFILE_LIST_MAX]:
+        text = _clean(item, PROFILE_FIELD_MAX)
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def _profile_seconds(value: Any) -> float:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_RUNTIME_SECONDS
+    if not math.isfinite(seconds):
+        return DEFAULT_MAX_RUNTIME_SECONDS
+    return max(MIN_RUNTIME_SECONDS, min(seconds, MAX_RUNTIME_SECONDS))
+
+
+def normalize_profile(raw: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    """把任意来源的执行画像收敛成固定形状：越界夹回，未知枚举回默认。
+
+    ``permissions`` 只被校验与导出，编排器不会据此放宽闸；``retention_mode`` 未知时
+    落 ``user_owned``（不误删主人数据的最低承诺），``memory_write_approval`` 只接受
+    真布尔值 —— 字符串 ``"false"`` 会被当成 False，绝不按"非空即真"解释。
+    """
+    source = raw if isinstance(raw, Mapping) else {}
+    compute = source.get("compute") if isinstance(source.get("compute"), Mapping) else {}
+    privacy = source.get("privacy") if isinstance(source.get("privacy"), Mapping) else {}
+    permissions = source.get("permissions") if isinstance(source.get("permissions"), Mapping) else {}
+    isolation = _clean(compute.get("isolation"), 16)
+    if isolation not in ISOLATION_MODES:
+        isolation = ISOLATION_MODES[0]
+    retention = _clean(privacy.get("retention_mode"), 32)
+    if retention not in RETENTION_MODES:
+        retention = "user_owned"
+    return {
+        "compute": {
+            "preferred_node": _clean(compute.get("preferred_node"), PROFILE_FIELD_MAX),
+            "isolation": isolation,
+            "max_runtime_seconds": round(_profile_seconds(compute.get("max_runtime_seconds")), 3),
+        },
+        "privacy": {
+            "retention_mode": retention,
+            "memory_write_approval": privacy.get("memory_write_approval") is True,
+        },
+        "permissions": {
+            "files": _profile_list(permissions.get("files")),
+            "browser": _profile_list(permissions.get("browser")),
+            "network": _profile_list(permissions.get("network")),
+        },
+    }
+
+
 class Orchestrator:
     """本机 Bot 之间的受策略约束任务派发与结果聚合。"""
 
@@ -235,6 +317,10 @@ class Orchestrator:
         self._executors: Dict[str, Executor] = {}
         self._inflight: Dict[str, asyncio.Task] = {}
         self._cancelled: set[str] = set()
+        self._resuming: set[str] = set()
+        self._hook_profile: Optional[Callable[[str], Mapping[str, Any]]] = None
+        self._hook_cleanup: Optional[Callable[[Mapping[str, Any]], Mapping[str, Any]]] = None
+        self._hook_state: Optional[Callable[[Mapping[str, Any]], Any]] = None
         #: 观测计数，只用于面板与自检，不作为权限依据。
         self.stats: Dict[str, int] = {
             "dispatched": 0,
@@ -243,10 +329,43 @@ class Orchestrator:
             "timeout": 0,
             "refused": 0,
             "cancelled": 0,
+            "declined": 0,
+            "awaiting_user": 0,
+            "cleanup": 0,
             "fanout": 0,
         }
 
     # ------------------------------------------------------------------ wiring
+    def attach_hooks(
+        self,
+        *,
+        profile_provider: Optional[Callable[[str], Mapping[str, Any]]] = None,
+        cleanup: Optional[Callable[[Mapping[str, Any]], Mapping[str, Any]]] = None,
+        state: Optional[Callable[[Mapping[str, Any]], Any]] = None,
+    ) -> None:
+        """注入三个可选回调：画像读取、工作区清理、状态监听（控制台卡片）。
+
+        三者都是**旁路**：任何一个抛错都不得改变状态机的结果。清理回调在终态同步执行
+        且必须幂等（重试取回的任务可能已经清过）；状态监听只用于推送，不允许 await。
+        """
+        if profile_provider is not None:
+            self._hook_profile = profile_provider
+        if cleanup is not None:
+            self._hook_cleanup = cleanup
+        if state is not None:
+            self._hook_state = state
+
+    def profile_for(self, bot_id: str) -> Dict[str, Any]:
+        """目标 Bot 的执行画像；读不到、读坏了都回默认画像，绝不阻断派发。"""
+        raw: Mapping[str, Any] = {}
+        if self._hook_profile is not None:
+            try:
+                fetched = self._hook_profile(_clean(bot_id, 64))
+                if isinstance(fetched, Mapping):
+                    raw = fetched
+            except Exception:  # noqa: BLE001 - 画像读取失败按默认画像走
+                raw = {}
+        return normalize_profile(raw)
     def register(self, capability: str, executor: Executor, *, writes: bool = False) -> None:
         """注册一个能力实现。``writes=True`` 直接拒：编排器只做只读投影。"""
         name = _clean(capability, 64)
@@ -283,11 +402,12 @@ class Orchestrator:
         return rows
 
     def snapshot(self, bot_id: Optional[str] = None) -> Result:
-        """编排面板的一屏数据：能力、授权、近期任务、计数。"""
+        """编排面板的一屏数据：能力、授权、近期任务、画像、计数。"""
         return {
             "capabilities": self.capabilities(),
             "grants": self.db.list_grants(origin_bot_id=bot_id) if bot_id else self.db.list_grants(),
             "tasks": self.db.list_tasks(bot_id=bot_id, limit=50),
+            "profile": self.profile_for(bot_id) if bot_id else normalize_profile({}),
             "stats": dict(self.stats),
             "ledger": self.db.task_stats(bot_id),
             "inflight": sorted(self._inflight),
@@ -297,6 +417,9 @@ class Orchestrator:
                 "max_fanout": self.max_fanout,
                 "timeout_min_seconds": TASK_TIMEOUT_MIN_SECONDS,
                 "timeout_max_seconds": TASK_TIMEOUT_MAX_SECONDS,
+                "max_runtime_seconds": MAX_RUNTIME_SECONDS,
+                "isolation_modes": list(ISOLATION_MODES),
+                "retention_modes": list(RETENTION_MODES),
             },
         }
 
@@ -312,11 +435,12 @@ class Orchestrator:
         parent_id: str = "",
         hops: int = 1,
     ) -> Result:
-        """受策略约束地派发一个子任务，等它跑完（或熔断）后返回任务记录。
+        """受策略约束地派发一个子任务，等它跑完（或熔断、或停在等审批）后返回任务记录。
 
-        所有拒绝都发生在**写 ``agent_tasks`` 之前**，除了 ``no_grant``/``hop_budget``/
-        ``cycle``/``busy`` 这四条也写一条 refused 行 —— 它们值得留在任务账本里，
-        因为"谁试图派给谁、被哪条闸挡下"本身就是审计要回答的问题。
+        所有拒绝都发生在**执行之前**，除了 ``no_grant``/``hop_budget``/``cycle``/``busy``
+        这四条也写一条 refused 行 —— 它们值得留在任务账本里，因为"谁试图派给谁、被哪条闸
+        挡下"本身就是审计要回答的问题。需要主人批准的任务返回 ``awaiting_user`` 行，
+        由 :meth:`resolve_approval` 续跑。
         """
         origin = _clean(origin_bot_id, 64)
         target = _clean(target_bot_id, 64)
@@ -335,7 +459,12 @@ class Orchestrator:
             )
         payload = validate_args(name, args)
 
-        refusal = self._policy_refusal(origin, target, name, payload, hops=hops, parent_id=parent_id)
+        grant = self._find_grant(origin, target, name)
+        profile = self.profile_for(target)
+        retention = str(profile["privacy"]["retention_mode"])
+        refusal = self._policy_refusal(
+            origin, target, name, payload, hops=hops, parent_id=parent_id, grant=grant
+        )
         if refusal is not None:
             code, detail = refusal
             task = self.db.create_task(
@@ -347,20 +476,27 @@ class Orchestrator:
                 args=payload,
                 status="refused",
                 hops=hops,
-                timeout_seconds=self._grant_timeout(origin, target, name),
+                timeout_seconds=self._grant_timeout(origin, target, name, grant=grant),
+                profile=profile,
+                retention_mode=retention,
             )
-            self.db.update_task(
+            self.stats["refused"] += 1
+            final = self._settle_terminal(
                 task["id"],
+                "refused",
+                level="warn",
+                audit_detail=code,
                 error_code=code,
                 detail=detail[:180],
                 started_at=self.clock(),
                 finished_at=self.clock(),
             )
-            self.stats["refused"] += 1
-            self._audit("refused", "warn", task, detail=code)
-            return self.db.get_task(task["id"]) or task
+            return final
 
-        timeout = self._grant_timeout(origin, target, name)
+        timeout = self._effective_timeout(self._grant_timeout(origin, target, name, grant=grant), profile)
+        approval = bool(grant and grant.get("require_approval")) or bool(
+            profile["privacy"]["memory_write_approval"]
+        )
         task = self.db.create_task(
             correlation_id=thread,
             origin_bot_id=origin,
@@ -368,86 +504,119 @@ class Orchestrator:
             capability=name,
             parent_id=parent_id,
             args=payload,
-            status="queued",
+            status="created",
             hops=hops,
             timeout_seconds=timeout,
+            profile=profile,
+            retention_mode=retention,
+            approval_required=approval,
         )
         task_id = str(task["id"])
         self.stats["dispatched"] += 1
-        self._audit("dispatch", "info", task, detail="queued")
+        created = self._transition(task_id, "created", event="dispatch", audit_detail="created")
+        self._transition(task_id, "authorized", audit_detail="grant")
+        self._transition(task_id, "scheduled", audit_detail=f"timeout={timeout:.3f}s")
+        self._transition(task_id, "allocated", audit_detail=f"isolation={profile['compute']['isolation']}")
+        running = self._transition(task_id, "running", started_at=self.clock(), audit_detail="start")
+        if approval:
+            self.stats["awaiting_user"] += 1
+            return self._transition(task_id, "awaiting_user", audit_detail="approval")
+        return await self._execute(running or created)
 
+    async def _execute(self, task: Mapping[str, Any]) -> Result:
+        """把一个 ``running`` 任务执行到底：成功走 completed→workspace_cleanup，失败落 failed。"""
+        task_id = str(task["id"])
+        payload = dict(task.get("args") or {})
         started = self.monotonic()
-        self.db.update_task(task_id, status="running", started_at=self.clock())
-        running = self.db.get_task(task_id) or task
         # 能力实现单独跑在一个子 Task 上：cancel() 只断这一条，发起方（请求协程）
         # 仍然活着，能把 cancelled 收尾写回账本再正常返回。
-        inner = asyncio.ensure_future(self._invoke(running, payload))
+        inner = asyncio.ensure_future(self._invoke(task, payload))
         self._inflight[task_id] = inner
         try:
-            outcome = await asyncio.wait_for(inner, timeout=timeout)
-        except asyncio.TimeoutError:
-            self.stats["timeout"] += 1
-            elapsed = (self.monotonic() - started) * 1000.0
-            final = self.db.update_task(
-                task_id,
-                status="timeout",
-                error_code="timeout",
-                detail=f"{timeout:.3f}s",
-                finished_at=self.clock(),
-                latency_ms=round(elapsed, 3),
+            outcome = await asyncio.wait_for(
+                inner, timeout=float(task.get("timeout_seconds") or TASK_TIMEOUT_MIN_SECONDS)
             )
-            self._audit("timeout", "warn", final or running, detail="timeout")
-            return final or running
+        except asyncio.TimeoutError:
+            return self._settle_timeout(task, started)
         except asyncio.CancelledError:
             if task_id in self._cancelled:
-                self.stats["cancelled"] += 1
-                elapsed = (self.monotonic() - started) * 1000.0
-                final = self.db.update_task(
-                    task_id,
-                    status="cancelled",
-                    error_code="cancelled",
-                    detail="operator",
-                    finished_at=self.clock(),
-                    latency_ms=round(elapsed, 3),
-                )
-                self._audit("cancelled", "warn", final or running, detail="cancelled")
-                return final or running
+                return self._settle_cancelled(task, started, "operator")
             raise
         except OrchestratorError as exc:
-            return self._settle_failed(task_id, running, exc, started)
+            return self._settle_failed(task, exc, started)
         except Exception as exc:  # noqa: BLE001 - 能力实现的任何异常都不能冒到调用方
-            return self._settle_failed(
-                task_id, running, OrchestratorError("executor_error", _brief(exc)), started
-            )
+            return self._settle_failed(task, OrchestratorError("executor_error", _brief(exc)), started)
         finally:
             self._inflight.pop(task_id, None)
             self._cancelled.discard(task_id)
 
+        elapsed = (self.monotonic() - started) * 1000.0
         if not isinstance(outcome, Mapping):
             return self._settle_failed(
-                task_id,
-                running,
+                task,
                 OrchestratorError("executor_error", f"能力返回 {type(outcome).__name__}，需要映射"),
                 started,
             )
-        elapsed = (self.monotonic() - started) * 1000.0
         try:
             blob = _dump_result(outcome)
         except OrchestratorError as exc:
             # 体积闸在 await 之后抛：不在这里收口的话，这一行会永远停在 running。
-            return self._settle_failed(task_id, running, exc, started)
-        final = self.db.update_task(
+            return self._settle_failed(task, exc, started)
+        if str(task.get("retention_mode") or "") == "zero_retention":
+            # 零留存：正文在落库前就被抹掉，账本只留"确实跑过"这一事实。
+            blob = _dump_result({"redacted": True, "retention_mode": "zero_retention"})
+        completed = self._transition(
             task_id,
-            status="succeeded",
+            "completed",
+            result_json=blob,
             error_code="",
             detail="",
-            result_json=blob,
             finished_at=self.clock(),
             latency_ms=round(elapsed, 3),
+            audit_detail="ok",
         )
-        self.stats["succeeded"] += 1
-        self._audit("succeeded", "info", final or running, detail="ok")
-        return final or running
+        return self._settle_cleanup(completed)
+
+    async def resolve_approval(self, task_id: str, approved: bool) -> Result:
+        """主人对 ``awaiting_user`` 任务的决定：批准则原地续跑，拒绝则落 canceled/declined。
+
+        批准不绕过授权：任务能走到这里就说明它已经过了 ``_policy_refusal``，批准只是
+        放行那道**额外的**人工闸。
+        """
+        wanted = _clean(task_id, 64)
+        task = self.db.get_task(wanted)
+        if task is None:
+            raise OrchestratorError("not_found", wanted)
+        if wanted in self._resuming:
+            raise OrchestratorError("not_awaiting", "正在续跑")
+        if task.get("status") != "awaiting_user":
+            raise OrchestratorError("not_awaiting", f"状态 {task.get('status')} 不在等审批")
+        self._resuming.add(wanted)
+        try:
+            if not approved:
+                self.stats["declined"] += 1
+                return self._settle_terminal(
+                    wanted,
+                    "cancelled",
+                    event="declined",
+                    level="warn",
+                    audit_detail="declined",
+                    error_code="declined",
+                    detail="declined",
+                    finished_at=self.clock(),
+                    latency_ms=0.0,
+                )
+            resumed = self._transition(
+                wanted,
+                "running",
+                event="approved",
+                started_at=self.clock(),
+                approved_at=self.clock(),
+                audit_detail="approval",
+            )
+            return await self._execute(resumed)
+        finally:
+            self._resuming.discard(wanted)
 
     async def fanout(
         self,
@@ -514,16 +683,17 @@ class Orchestrator:
         counts: Dict[str, int] = {}
         for target, item in zip(wanted, settled):
             if isinstance(item, OrchestratorError):
-                record = {"target_bot_id": target, "status": "refused", "error_code": item.code,
-                          "detail": item.detail[:180], "result": {}}
+                record = {"target_bot_id": target, "status": "refused", "outcome": "failed",
+                          "error_code": item.code, "detail": item.detail[:180], "result": {}}
             elif isinstance(item, Exception):
-                record = {"target_bot_id": target, "status": "failed", "error_code": "executor_error",
-                          "detail": _brief(item), "result": {}}
+                record = {"target_bot_id": target, "status": "failed", "outcome": "failed",
+                          "error_code": "executor_error", "detail": _brief(item), "result": {}}
             else:
                 record = {
                     "target_bot_id": target,
                     "task_id": item.get("id", ""),
                     "status": item.get("status", "failed"),
+                    "outcome": item.get("outcome", "failed"),
                     "error_code": item.get("error_code", ""),
                     "detail": item.get("detail", ""),
                     "latency_ms": item.get("latency_ms", 0.0),
@@ -531,7 +701,7 @@ class Orchestrator:
                 }
             counts[record["status"]] = counts.get(record["status"], 0) + 1
             rows.append(record)
-        done = counts.get("succeeded", 0)
+        done = sum(1 for record in rows if record["outcome"] == "succeeded")
         aggregate = {
             "correlation_id": thread,
             "capability": name,
@@ -552,24 +722,41 @@ class Orchestrator:
 
     # ---------------------------------------------------------------- control
     def cancel(self, task_id: str) -> Result:
-        """取消一个仍在跑的任务。已落定的任务不可取消，也不回改历史。"""
+        """取消一个仍在生命周期内的任务。已落定的任务不可取消，也不回改历史。"""
         wanted = _clean(task_id, 64)
         task = self.db.get_task(wanted)
         if task is None:
             raise OrchestratorError("not_found", wanted)
-        if task.get("status") != "running":
-            raise OrchestratorError("not_cancellable", f"状态 {task.get('status')} 不可取消")
+        status = str(task.get("status") or "")
+        if status not in ACTIVE_STATUSES or wanted in self._resuming:
+            raise OrchestratorError("not_cancellable", f"状态 {status} 不可取消")
         holder = self._inflight.get(wanted)
+        if status == "awaiting_user":
+            # 挂起的任务没有协程可断，直接落终态并跑清理。
+            self.stats["cancelled"] += 1
+            return self._settle_terminal(
+                wanted,
+                "cancelled",
+                level="warn",
+                audit_detail="cancelled",
+                error_code="cancelled",
+                detail="operator",
+                finished_at=self.clock(),
+            )
         self._cancelled.add(wanted)
         if holder is None:
             # 没有在本进程里挂着协程（例如重启后遗留的 running 行）：直接落终态收口。
             self.stats["cancelled"] += 1
-            final = self.db.update_task(
-                wanted, status="cancelled", error_code="cancelled",
-                detail="orphan", finished_at=self.clock(),
+            final = self._settle_terminal(
+                wanted,
+                "cancelled",
+                level="warn",
+                audit_detail="cancelled",
+                error_code="cancelled",
+                detail="orphan",
+                finished_at=self.clock(),
             )
-            self._audit("cancelled", "warn", final or task, detail="cancelled")
-            return final or task
+            return final
         holder.cancel()
         return self.db.get_task(wanted) or task
 
@@ -601,21 +788,173 @@ class Orchestrator:
             ),
         }
 
-    # ----------------------------------------------------------------- policy
-    def _grant_timeout(self, origin: str, target: str, capability: str) -> float:
-        grant = None
+    # ------------------------------------------------------------- transitions
+    def _transition(
+        self,
+        task_id: str,
+        status: str,
+        *,
+        event: str = "",
+        level: str = "info",
+        audit_detail: str = "",
+        **fields: Any,
+    ) -> Result:
+        """写一次状态迁移：更新行 → 写审计 → 通知监听器；三步同源，不会各说各话。"""
+        row = self.db.update_task(task_id, status=status, **fields)
+        if row is None:
+            raise OrchestratorError("not_found", task_id)
+        self._audit(event or status, level, row, detail=audit_detail or status)
+        self._notify(row)
+        return row
+
+    def _notify(self, row: Optional[Mapping[str, Any]]) -> None:
+        hook = self._hook_state
+        if hook is None or row is None:
+            return
         try:
-            grant = self.db.find_grant(origin, target, capability)
+            hook(row)
+        except Exception:  # noqa: BLE001 - 卡片推送失败不得回滚状态机
+            pass
+
+    def _run_cleanup(self, task: Optional[Mapping[str, Any]]) -> str:
+        """同步跑一次工作区清理，返回可落库的短摘要；清理失败只记录、不改判结果。"""
+        if task is None:
+            return "absent"
+        hook = self._hook_cleanup
+        if hook is None:
+            return "not_configured"
+        try:
+            outcome = hook(dict(task))
+        except Exception as exc:  # noqa: BLE001
+            return f"error:{_brief(exc, 90)}"[:180]
+        if isinstance(outcome, Mapping):
+            try:
+                detail = json.dumps(dict(outcome), ensure_ascii=False, default=str, sort_keys=True)
+            except (TypeError, ValueError):
+                detail = "ok"
+        else:
+            detail = "ok"
+        self.stats["cleanup"] += 1
+        return detail[:120]
+
+    def _settle_terminal(
+        self,
+        task_id: str,
+        status: str,
+        *,
+        event: str = "",
+        level: str = "info",
+        audit_detail: str = "",
+        **fields: Any,
+    ) -> Result:
+        """失败侧终态的统一收口：先跑清理并把摘要写进同一行，再迁移并通知。"""
+        cleanup_detail = self._run_cleanup(self.db.get_task(task_id))
+        return self._transition(
+            task_id,
+            status,
+            event=event,
+            level=level,
+            audit_detail=audit_detail,
+            cleanup_at=self.clock(),
+            cleanup_detail=cleanup_detail,
+            **fields,
+        )
+
+    def _settle_cleanup(self, completed: Mapping[str, Any]) -> Result:
+        """成功终态：completed → workspace_cleanup；ephemeral 的结果在清理时一并抹除。"""
+        task_id = str(completed["id"])
+        cleanup_detail = self._run_cleanup(completed)
+        fields: Dict[str, Any] = {}
+        if str(completed.get("retention_mode") or "") == "ephemeral":
+            fields["result_json"] = ""
+            cleanup_detail = f"{cleanup_detail};result_purged"
+        final = self._transition(
+            task_id,
+            "workspace_cleanup",
+            cleanup_at=self.clock(),
+            cleanup_detail=cleanup_detail[:180],
+            audit_detail="ok",
+            **fields,
+        )
+        self.stats["succeeded"] += 1
+        return final
+
+    def _settle_timeout(self, task: Mapping[str, Any], started: float) -> Result:
+        self.stats["timeout"] += 1
+        self.stats["failed"] += 1
+        elapsed = (self.monotonic() - started) * 1000.0
+        seconds = float(task.get("timeout_seconds") or TASK_TIMEOUT_MIN_SECONDS)
+        return self._settle_terminal(
+            str(task["id"]),
+            "failed",
+            level="warn",
+            audit_detail="timeout",
+            error_code="timeout",
+            detail=f"{seconds:.3f}s",
+            finished_at=self.clock(),
+            latency_ms=round(elapsed, 3),
+        )
+
+    def _settle_cancelled(self, task: Mapping[str, Any], started: float, detail: str) -> Result:
+        self.stats["cancelled"] += 1
+        elapsed = (self.monotonic() - started) * 1000.0
+        return self._settle_terminal(
+            str(task["id"]),
+            "cancelled",
+            level="warn",
+            audit_detail="cancelled",
+            error_code="cancelled",
+            detail=detail,
+            finished_at=self.clock(),
+            latency_ms=round(elapsed, 3),
+        )
+
+    def _settle_failed(
+        self, task: Mapping[str, Any], exc: OrchestratorError, started: float
+    ) -> Result:
+        self.stats["failed"] += 1
+        elapsed = (self.monotonic() - started) * 1000.0
+        return self._settle_terminal(
+            str(task["id"]),
+            "failed",
+            level="error",
+            audit_detail=exc.code,
+            error_code=exc.code,
+            detail=exc.detail[:180],
+            finished_at=self.clock(),
+            latency_ms=round(elapsed, 3),
+        )
+
+    # ----------------------------------------------------------------- policy
+    def _find_grant(
+        self, origin: str, target: str, capability: str
+    ) -> Optional[Mapping[str, Any]]:
+        try:
+            return self.db.find_grant(origin, target, capability)
         except LedgerError:
-            grant = None
-        return float(grant["timeout_seconds"]) if grant else TASK_TIMEOUT_MIN_SECONDS
+            return None
+
+    def _grant_timeout(
+        self, origin: str, target: str, capability: str, *, grant: Optional[Mapping[str, Any]] = None
+    ) -> float:
+        row = grant if grant is not None else self._find_grant(origin, target, capability)
+        return float(row["timeout_seconds"]) if row else TASK_TIMEOUT_MIN_SECONDS
+
+    def _effective_timeout(self, grant_timeout: float, profile: Mapping[str, Any]) -> float:
+        """授权超时与画像 ``max_runtime_seconds`` 取更小者 —— 画像只能收紧，不能放宽。"""
+        runtime = float(profile["compute"]["max_runtime_seconds"])
+        return max(
+            TASK_TIMEOUT_MIN_SECONDS,
+            min(float(grant_timeout), runtime, TASK_TIMEOUT_MAX_SECONDS),
+        )
 
     def _policy_refusal(
         self, origin: str, target: str, capability: str, args: Mapping[str, Any],
-        *, hops: int, parent_id: str,
+        *, hops: int, parent_id: str, grant: Optional[Mapping[str, Any]] = None,
     ) -> Optional[Tuple[str, str]]:
         """返回 ``(reason_code, detail)`` 表示拒绝；``None`` 表示放行。"""
-        grant = self.db.find_grant(origin, target, capability)
+        if grant is None:
+            grant = self._find_grant(origin, target, capability)
         if grant is None:
             return ("no_grant", f"{origin}→{target}:{capability} 无生效授权")
         if hops > int(grant["max_hops"]):
@@ -728,22 +1067,6 @@ class Orchestrator:
             outcome = await outcome
         return outcome
 
-    def _settle_failed(
-        self, task_id: str, running: Mapping[str, Any], exc: OrchestratorError, started: float
-    ) -> Result:
-        self.stats["failed"] += 1
-        elapsed = (self.monotonic() - started) * 1000.0
-        final = self.db.update_task(
-            task_id,
-            status="failed",
-            error_code=exc.code,
-            detail=exc.detail[:180],
-            finished_at=self.clock(),
-            latency_ms=round(elapsed, 3),
-        )
-        self._audit("failed", "error", final or running, detail=exc.code)
-        return final or running
-
 
 def _dump_result(outcome: Mapping[str, Any]) -> str:
     """结果落库前的唯一出口：序列化 + 体积闸。超限直接判失败，不截断半截 JSON。"""
@@ -759,12 +1082,17 @@ def _dump_result(outcome: Mapping[str, Any]) -> str:
 
 
 __all__ = (
+    "ACTIVE_STATUSES",
     "CAPABILITY_SPECS",
+    "DEFAULT_MAX_RUNTIME_SECONDS",
     "FANOUT_BUDGET_MAX_SECONDS",
     "FANOUT_MAX_DEFAULT",
     "GRANT_WILDCARD",
+    "ISOLATION_MODES",
     "Orchestrator",
     "OrchestratorError",
     "REASONS",
+    "TERMINAL_STATUSES",
+    "normalize_profile",
     "validate_args",
 )

@@ -702,7 +702,7 @@ def add_admin_routes(app: FastAPI) -> None:
         """把稳定的原因码翻成 HTTP 语义；被策略**拒绝**是 200 + refused 行，不是错误。"""
         code = exc.code
         status = 404 if code in ("unknown_origin", "unknown_target", "not_found") else (
-            409 if code == "not_cancellable" else 400
+            409 if code in ("not_cancellable", "not_awaiting") else 400
         )
         return fail(status, f"{code}: {exc.detail}" if exc.detail else code)
 
@@ -747,6 +747,7 @@ def add_admin_routes(app: FastAPI) -> None:
                 max_concurrent=_int(body.get("max_concurrent"), 4, low=1, high=MAX_TASK_CONCURRENCY),
                 timeout_seconds=_float(body.get("timeout_seconds"), 20.0),
                 enabled=str(body.get("enabled", "true")).lower() not in ("0", "false", "no"),
+                require_approval=str(body.get("require_approval", "false")).lower() not in ("0", "false", "no"),
             )
         except LedgerError as exc:
             return fail(400, f"授权写入失败：{exc}")
@@ -846,6 +847,56 @@ def add_admin_routes(app: FastAPI) -> None:
             return ok(orchestrator_of(request).replay(
                 _clean(correlation_id, 64), limit=_int(limit, 200, low=1, high=500)
             ))
+        except OrchestratorError as exc:
+            return orch_fail(exc)
+
+    # --------------------------------------------------------- 任务 API（v1）
+    # 与 ``/api/agent/orch/*`` 共用同一个编排器，只是把「任务」提升为一等资源：
+    # 创建 / 查询 / 批准 / 取消四个动作各自一条稳定路径，供控制台与客户端对接。
+    TASK_API_PREFIX = "/api/v1/tasks"
+
+    @app.post(TASK_API_PREFIX)
+    async def task_create(request: Request, _=Depends(require_admin)) -> Any:
+        """派发一个任务。需要主人批准时返回 ``awaiting_user``（不是错误，也不占连接）。"""
+        body = await body_of(request)
+        try:
+            task = await orchestrator_of(request).dispatch(
+                _clean(body.get("origin_bot_id") or body.get("bot_id"), 64),
+                _clean(body.get("target_bot_id"), 64),
+                _clean(body.get("capability"), 64),
+                body.get("args") if isinstance(body.get("args"), Mapping) else {},
+                correlation_id=_clean(body.get("correlation_id"), 64),
+                parent_id=_clean(body.get("parent_id"), 64),
+                hops=_int(body.get("hops"), 1, low=1, high=MAX_TASK_HOPS),
+            )
+        except OrchestratorError as exc:
+            return orch_fail(exc)
+        return ok({"task": task})
+
+    @app.get(TASK_API_PREFIX + "/{task_id}")
+    async def task_detail(request: Request, task_id: str, _=Depends(require_admin)) -> Any:
+        """任务详情：行本身（含派生 ``outcome``）、子任务与清理摘要。"""
+        orch = orchestrator_of(request)
+        row = orch.db.get_task(_clean(task_id, 64))
+        if row is None:
+            return fail(404, f"任务 {task_id} 不存在")
+        return ok({"task": row, "children": orch.db.task_children(row["id"])})
+
+    @app.post(TASK_API_PREFIX + "/{task_id}/approve")
+    async def task_approve(request: Request, task_id: str, _=Depends(require_admin)) -> Any:
+        """批准（默认）或拒绝一个 ``awaiting_user`` 任务；批准不绕过任何授权。"""
+        body = await body_of(request)
+        approved = str(body.get("approved", "true")).strip().lower() not in ("0", "false", "no", "decline")
+        try:
+            row = await orchestrator_of(request).resolve_approval(_clean(task_id, 64), approved)
+        except OrchestratorError as exc:
+            return orch_fail(exc)
+        return ok({"task": row, "approved": approved})
+
+    @app.post(TASK_API_PREFIX + "/{task_id}/cancel")
+    async def task_cancel(request: Request, task_id: str, _=Depends(require_admin)) -> Any:
+        try:
+            return ok({"task": orchestrator_of(request).cancel(_clean(task_id, 64))})
         except OrchestratorError as exc:
             return orch_fail(exc)
 

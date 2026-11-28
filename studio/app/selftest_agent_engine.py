@@ -13,7 +13,7 @@
   屏蔽时段一律按 **ISO 星期**（1=周一 … 7=周日）判定；候选时刻永远按它自己的墙钟比较。
 * ``reasoner_bridge``：大模型只写话术，拿不到工具、不能落库；未启用、超时、非 200、返回
   垃圾都只是「这一条用了模板」，不是功能失效；API Key 不得出现在提示词、状态或 repr 里。
-* ``agent_copy``：21 语种 × 12 话术的键集与占位符集必须完全对齐，且某一种语言里断言的
+* ``agent_copy``：21 语种 × 22 话术的键集与占位符集必须完全对齐，且某一种语言里断言的
   事实不能被另一种语言反驳（本仓刚被「一种语言多说了一句另外 17 种都没有的话」咬过）。
 """
 
@@ -1385,14 +1385,14 @@ _BRACE_RE = re.compile(r"[{}]")
 
 
 def _copy_locale_parity(test: SelfTest, h: Harness) -> None:
-    """21 语种 × 12 话术的键集合必须完全一致。"""
+    """21 语种 × 22 话术的键集合必须完全一致。"""
     locales = list(i18n.LOCALES)
     test.eq("LOCALES 有 21 个", len(locales), 21)
     test.eq("LOCALES 无重复", len(set(locales)), 21)
     test.eq("回退语种是 en", i18n.FALLBACK_LOCALE, "en")
     test.eq("回退语种在目录里", i18n.FALLBACK_LOCALE in locales, True)
-    test.eq("话术种类有 12 条", len(agent_copy.KINDS), 12)
-    test.eq("KINDS 无重复", len(set(agent_copy.KINDS)), 12)
+    test.eq("话术种类有 22 条", len(agent_copy.KINDS), 22)
+    test.eq("KINDS 无重复", len(set(agent_copy.KINDS)), 22)
     test.eq("目录语种数=LOCALES 数", len(agent_copy.CATALOG), len(locales))
     base_kinds = set(agent_copy.CATALOG[i18n.FALLBACK_LOCALE])
     for code in locales:
@@ -1574,7 +1574,11 @@ def _copy_consistency(test: SelfTest, h: Harness) -> None:
              "end": "11:00", "to": "周四 15:00", "from": "周三 15:00", "date": "2026-12-02",
              "timezone": "UTC", "duration": 30, "window": "7 天", "options": "15:00, 16:00",
              "file_name": "notes.pdf", "headline": "要点", "actions": "跟进 A", "code": "AB12",
-             "reason": "没有共同空档"}
+             "reason": "没有共同空档",
+             # 任务卡四种话术的槽位。编号/百分比给同一组数字，跨语种一致性门禁才有意义。
+             "task": "ledger.profile", "capability": "ledger.profile", "scope": "files: none",
+             "outcome": "SUCCEEDED", "label": "投影", "step": 2, "total": 4, "percent": 50,
+             "question": "选哪个？"}
     for kind in agent_copy.KINDS:
         # *_confirm 三条只在 node.approve() 成功之后才发（agent_runtime 的唯一调用点），
         # 过去式是对既成事实的陈述；其余话术都发生在主人点确认之前，一句越界承诺都不能有。

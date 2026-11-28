@@ -2785,7 +2785,7 @@ def group_i18n(test: SelfTest, h: Harness) -> None:
     t.eq("目录只有后台与官网两套", sorted(CATALOGS), ["admin", "site"])
     t.eq("后台目录覆盖 21 语种", sorted(CATALOGS["admin"]), sorted(LOCALES))
     t.eq("官网目录覆盖 21 语种", sorted(CATALOGS["site"]), sorted(LOCALES))
-    t.eq("后台英文基准词条数", len(en_admin), 130)
+    t.eq("后台英文基准词条数", len(en_admin), 131)
     t.eq("官网英文基准词条数", len(en_site), 21)
     for locale in LOCALES:
         t.eq(f"{locale} 后台无缺失词条", missing_keys(locale, "admin"), [])
@@ -4397,13 +4397,21 @@ AGENT_TABLES = (
     "calendar_cache",
 )
 
+#: v6 的 agent_tasks 列序，供迁移测试手写旧行；与 ``database._MIGRATIONS[5]`` 同源。
+LEGACY_TASK_COLUMNS = (
+    "id", "correlation_id", "parent_id", "origin_bot_id", "target_bot_id", "capability",
+    "args_json", "status", "result_json", "error_code", "detail", "hops", "timeout_seconds",
+    "created_at", "started_at", "finished_at", "latency_ms",
+)
+
 
 def group_agent_ledger(test: SelfTest, h: Harness) -> None:
-    """账本 v5：替身提案、A2A 协商、访客链接、审计与忙闲缓存的迁移与约束。"""
+    """账本 v5/v7：替身提案、A2A 协商、访客链接、审计与忙闲缓存的迁移与约束，
+    外加 v7 的 11 态任务行与 v6 旧行逐条映射（历史语义一条都不许丢）。"""
     t = test
     db = h.database("agent_ledger")
 
-    t.eq("账本 schema 版本推进到 6", SCHEMA_VERSION, 6)
+    t.eq("账本 schema 版本推进到 7", SCHEMA_VERSION, 7)
     tables = {row["name"] for row in db.conn.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table'")}
     t.eq("v5 的六张表全部建成", [x for x in AGENT_TABLES if x not in tables], [])
@@ -4413,12 +4421,79 @@ def group_agent_ledger(test: SelfTest, h: Harness) -> None:
         "OR name LIKE 'idx_negot%' OR name LIKE 'idx_cal%')")}
     t.check("v5 建了配套索引", len(indexes) >= 6, str(sorted(indexes)))
     t.eq("重跑迁移不再应用任何版本", db.migrate(target_version=SCHEMA_VERSION), [])
-    t.eq("迁移台账记到 6",
+    t.eq("迁移台账记到 7",
          [r["version"] for r in db.conn.execute(
-             "SELECT version FROM schema_migrations ORDER BY version")], [1, 2, 3, 4, 5, 6])
+             "SELECT version FROM schema_migrations ORDER BY version")], [1, 2, 3, 4, 5, 6, 7])
     again = {row["name"] for row in db.conn.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table'")}
     t.eq("重跑迁移不会把表建两遍", sorted(again & set(AGENT_TABLES)), sorted(AGENT_TABLES))
+
+    # ---------------------------------------------------- v6 → v7 历史任务迁移
+    # 手写一份停在 v6 的账本（旧 CHECK 允许七个旧状态），再迁移到当前版本：
+    # 每一条旧行都必须落进新状态词表，且"为什么结束"（error_code）原样保留。
+    legacy = Database(h.root / "legacy_v6.db")
+    t.eq("手写账本停在 v6", legacy.migrate(target_version=6), [1, 2, 3, 4, 5, 6])
+    legacy.conn.execute(
+        "INSERT INTO agent_task_grants (origin_bot_id, target_bot_id, capability, "
+        "created_at, updated_at) VALUES ('bot_aa11bb22', 'bot_cc33dd44', 'ledger.profile', 1, 1)")
+    old_rows = [
+        ("tk_000000000001", "queued", "", ""),
+        ("tk_000000000002", "running", "", ""),
+        ("tk_000000000003", "succeeded", '{"ok": true}', ""),
+        ("tk_000000000004", "failed", "", "executor_error"),
+        ("tk_000000000005", "timeout", "", ""),
+        ("tk_000000000006", "timeout", "", "boom"),
+        ("tk_000000000007", "refused", "", "no_grant"),
+        ("tk_000000000008", "cancelled", "", "cancelled"),
+    ]
+    for task_id, status, result_json, error_code in old_rows:
+        legacy.conn.execute(
+            f"INSERT INTO agent_tasks ({', '.join(LEGACY_TASK_COLUMNS)}) "
+            "VALUES (?, ?, '', 'bot_aa11bb22', 'bot_cc33dd44', 'ledger.profile', '{}', ?, ?, ?, "
+            "'', 1, 20, 1, 0, 0, 0)",
+            (task_id, "th_legacy000001", status, result_json, error_code),
+        )
+    applied = legacy.migrate()
+    t.eq("迁移只补 v7 一个版本", applied, [7])
+    mapped = {r["id"]: r for r in legacy.list_tasks(limit=50)}
+    t.eq("七个旧状态逐一映射到 11 态词表",
+         {key: row["status"] for key, row in mapped.items()},
+         {"tk_000000000001": "scheduled", "tk_000000000002": "running",
+          "tk_000000000003": "completed", "tk_000000000004": "failed",
+          "tk_000000000005": "failed", "tk_000000000006": "failed",
+          "tk_000000000007": "refused", "tk_000000000008": "cancelled"})
+    t.eq("旧 timeout 且无原因码的补成 timeout",
+         mapped["tk_000000000005"]["error_code"], "timeout")
+    t.eq("旧 timeout 自带原因码的不被覆盖",
+         mapped["tk_000000000006"]["error_code"], "boom")
+    t.eq("旧 succeeded 的结果原样保留",
+         mapped["tk_000000000003"]["result"], {"ok": True})
+    t.eq("迁移后派生 outcome 与存储状态同源",
+         {key: row["outcome"] for key, row in mapped.items()},
+         {"tk_000000000001": "pending", "tk_000000000002": "pending",
+          "tk_000000000003": "succeeded", "tk_000000000004": "failed",
+          "tk_000000000005": "failed", "tk_000000000006": "failed",
+          "tk_000000000007": "failed", "tk_000000000008": "cancelled"})
+    t.eq("迁移行的新列全部取默认值",
+         [(row["retention_mode"], row["approval_required"], row["approved_at"],
+           row["cleanup_at"], row["cleanup_detail"], row["profile"])
+          for row in mapped.values()],
+         [("", False, 0.0, 0.0, "", {})] * len(mapped))
+    t.eq("旧授权行补上 require_approval=0",
+         legacy.list_grants()[0]["require_approval"], 0)
+    fresh = legacy.create_task(
+        correlation_id="th_legacy000002", origin_bot_id="bot_aa11bb22",
+        target_bot_id="bot_cc33dd44", capability="ledger.profile",
+        status="workspace_cleanup")
+    t.eq("迁移后新词表可写", fresh["status"], "workspace_cleanup")
+    legacy.close()
+
+    #: 旧七态在 v7 之后不再合法：迁移是单向的，不提供"回到 queued"的入口。
+    for old_status in ("queued", "succeeded", "timeout"):
+        t.raises(f"旧状态 {old_status} 不能再写入", LedgerError, db.create_task,
+                 correlation_id="x", origin_bot_id="bot_11112222",
+                 target_bot_id="bot_33334444", capability="ledger.profile",
+                 status=old_status)
 
     # ---------------------------------------------------------------- 标识符
     ids = [new_proposal_id() for _ in range(200)]
@@ -4730,8 +4805,12 @@ def group_agent_console(test: SelfTest, h: Harness) -> None:
     t.eq("运行时点明插件 id", s["runtime"]["plugin_id"], "personal_agent")
     t.eq("运行时七段", sorted(s["runtime"]),
          ["counts", "errors", "mac_node", "needle", "peers", "plugin_id", "reasoner"])
-    t.eq("运行时给出六个计数", sorted(s["runtime"]["counts"]),
-         ["a2a", "approvals", "cards", "errors", "handled", "ics"])
+    t.eq("运行时给出十个计数", sorted(s["runtime"]["counts"]),
+         ["a2a", "approvals", "cards", "errors", "handled", "ics",
+          "task_approvals", "task_cards", "task_choices", "task_declines"])
+    t.eq("任务卡四类计数从零起算",
+         [s["runtime"]["counts"][k] for k in
+          ("task_cards", "task_approvals", "task_choices", "task_declines")], [0, 0, 0, 0])
     t.eq("摘要里的节点段与 /node 同源", s["node"], c.get(f"{api}/node", headers=a).json()["node"])
     t.eq("节点桥已开启", s["node"]["enabled"], True)
     t.eq("节点桥锁定回环", s["node"]["loopback"], True)
@@ -4745,9 +4824,16 @@ def group_agent_console(test: SelfTest, h: Harness) -> None:
     t.eq("基址可用时不给原因", s["guest"]["reason"], "")
     t.eq("未点名 Bot 时不带 bot 段", "bot" not in s, True)
     named = c.get(f"{api}/summary", headers=a, params={"bot_id": bid}).json()["bot"]
-    t.eq("点名 Bot 后给出十段", sorted(named),
-         ["bot_id", "enabled", "links", "locale", "negotiations", "owner_chat", "peers", "preferences",
-          "proposals", "timezone"])
+    t.eq("点名 Bot 后给出十三段", sorted(named),
+         ["bot_id", "enabled", "execution", "links", "locale", "negotiations", "owner_chat", "peers",
+          "preferences", "proposals", "task_cards", "tasks", "timezone"])
+    t.eq("执行画像随 Bot 导出", named["execution"],
+         {"compute": {"preferred_node": "", "isolation": "process", "max_runtime_seconds": 120.0},
+          "privacy": {"retention_mode": "user_owned", "memory_write_approval": False},
+          "permissions": {"files": [], "browser": [], "network": []}})
+    t.eq("任务账本四段随 Bot 导出", sorted(named["tasks"]),
+         ["active_grants", "by_capability", "by_status", "total"])
+    t.eq("尚未发卡时卡片表为空", named["task_cards"], [])
     t.eq("Bot 默认启用替身", named["enabled"], True)
     t.eq("未配置主人会话时为空", named["owner_chat"], "")
     t.eq("未配置语种回退后台语种", named["locale"], "en")
@@ -5348,29 +5434,40 @@ def group_agent_console(test: SelfTest, h: Harness) -> None:
 
 
 def group_orchestration(test: SelfTest, h: Harness) -> None:
-    """跨 Agent 编排的真实行为：默认拒绝、超时熔断、回环/并发闸、扇出聚合、审计回放、打码。
+    """跨 Agent 编排的真实行为：11 态生命周期、默认拒绝、审批闸、执行画像、工作区清理、
+    超时熔断、回环/并发闸、扇出聚合、审计回放、打码，以及控制台的 HTTP 任务 API。
 
     这一组打在 :mod:`app.orchestrator` 上，执行体用注入的闭包 —— 编排器承诺的是"策略、
     账本、聚合、审计"四件事，投影本身由 :mod:`app.orchestrator_local` 负责，末尾另用真实
-    装配的栈证明五个投影不是空壳。派发都是 async，因此一个场景一次 ``h.async_run``；
-    需要并发时序的地方（熔断、busy 闸、取消）在同一事件循环里用 ``asyncio`` 原语排布，
-    不靠 sleep 赌概率。
+    装配的栈证明五个投影不是空壳、四个任务端点不是桩。派发都是 async，因此一个场景一次
+    ``h.async_run``；需要并发时序的地方（熔断、busy 闸、取消）在同一事件循环里用
+    ``asyncio`` 原语排布，不靠 sleep 赌概率。
     """
     t = test
     from .database import (
         GRANT_WILDCARD,
         MAX_TASK_CONCURRENCY,
         MAX_TASK_HOPS,
+        RETENTION_MODES,
         TASK_RESULT_MAX_CHARS,
+        TASK_STATUSES,
         TASK_TIMEOUT_MAX_SECONDS,
         TASK_TIMEOUT_MIN_SECONDS,
+        task_outcome,
     )
     from .orchestrator import (
+        ACTIVE_STATUSES,
         CAPABILITY_SPECS,
+        DEFAULT_MAX_RUNTIME_SECONDS,
         FANOUT_BUDGET_MAX_SECONDS,
         FANOUT_MAX_DEFAULT,
+        ISOLATION_MODES,
+        MAX_RUNTIME_SECONDS,
+        MIN_RUNTIME_SECONDS,
         Orchestrator,
         OrchestratorError,
+        TERMINAL_STATUSES,
+        normalize_profile,
         validate_args,
     )
 
@@ -5380,6 +5477,34 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
     gamma = str(db.create_bot("orchgamma", 5392)["id"])
     delta = str(db.create_bot("orchdelta", 5393)["id"])
     o = Orchestrator(db)
+
+    # 画像来源按 Bot 注入：本组只有这一处读画像，其他小节按需往表里塞条目。
+    profiles: Dict[str, Dict[str, Any]] = {}
+    exploding: set = set()
+
+    def profile_provider(bot_id: str) -> Dict[str, Any]:
+        if bot_id in exploding:
+            raise RuntimeError("画像存储读不了")
+        return dict(profiles.get(bot_id, {}))
+
+    o.attach_hooks(profile_provider=profile_provider)
+
+    # ------------------------------------------------------------------ 词表
+    t.eq("存储状态恰好 11 个", len(TASK_STATUSES), 11)
+    t.eq("状态词表与成功终态", list(TASK_STATUSES),
+         ["created", "authorized", "scheduled", "allocated", "running", "awaiting_user",
+          "completed", "workspace_cleanup", "failed", "cancelled", "refused"])
+    t.eq("成功终态是 workspace_cleanup", TERMINAL_STATUSES[0], "workspace_cleanup")
+    t.eq("活跃状态不含终态", [s for s in ACTIVE_STATUSES if s in TERMINAL_STATUSES], [])
+    t.eq("outcome 派生表覆盖 11 态",
+         {s: task_outcome(s) for s in TASK_STATUSES},
+         {"created": "pending", "authorized": "pending", "scheduled": "pending",
+          "allocated": "pending", "running": "pending", "awaiting_user": "pending",
+          "completed": "succeeded", "workspace_cleanup": "succeeded",
+          "failed": "failed", "cancelled": "cancelled", "refused": "failed"})
+    t.eq("未知状态按 pending 处理", task_outcome("teleported"), "pending")
+    t.eq("留存模式三个", list(RETENTION_MODES),
+         ["zero_retention", "ephemeral", "user_owned"])
 
     # ------------------------------------------------------------------ 注册面
     t.eq("新编排器零注册", o.registered(), [])
@@ -5439,12 +5564,15 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
     t.eq("规格里没有能力声明写副作用", [n for n, s in CAPABILITY_SPECS.items() if s.get("writes")], [])
 
     snap = o.snapshot()
-    t.eq("快照七段", sorted(snap),
-         ["capabilities", "grants", "inflight", "ledger", "limits", "stats", "tasks"])
+    t.eq("快照八段", sorted(snap),
+         ["capabilities", "grants", "inflight", "ledger", "limits", "profile", "stats", "tasks"])
     t.eq("快照边界等于全局边界", snap["limits"],
          {"max_hops": MAX_TASK_HOPS, "max_concurrent": MAX_TASK_CONCURRENCY,
           "max_fanout": FANOUT_MAX_DEFAULT, "timeout_min_seconds": TASK_TIMEOUT_MIN_SECONDS,
-          "timeout_max_seconds": TASK_TIMEOUT_MAX_SECONDS})
+          "timeout_max_seconds": TASK_TIMEOUT_MAX_SECONDS,
+          "max_runtime_seconds": MAX_RUNTIME_SECONDS,
+          "isolation_modes": list(ISOLATION_MODES), "retention_modes": list(RETENTION_MODES)})
+    t.eq("不点名 Bot 时快照给默认画像", snap["profile"], normalize_profile({}))
     t.eq("空账本的计数全零", sorted(k for k, v in snap["stats"].items() if v), [])
     t.eq("无在途任务", snap["inflight"], [])
     t.eq("默认扇出上限", FANOUT_MAX_DEFAULT, 8)
@@ -5481,9 +5609,14 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
     refused = dispatch(origin, beta, "ledger.profile", {})
     t.eq("无授权即拒绝", refused["status"], "refused")
     t.eq("拒绝原因码", refused["error_code"], "no_grant")
+    t.eq("拒绝的派生结果是 failed", refused["outcome"], "failed")
     t.eq("拒绝自带关联号", bool(refused["correlation_id"]), True)
     t.eq("拒绝不落结果", refused["result"], {})
     t.eq("拒绝行沿用缺省超时", refused["timeout_seconds"], TASK_TIMEOUT_MIN_SECONDS)
+    t.eq("拒绝行的留存取默认画像", refused["retention_mode"], "user_owned")
+    t.eq("拒绝行不需要审批", refused["approval_required"], False)
+    t.eq("拒绝也跑清理（未装配回调）", refused["cleanup_detail"], "not_configured")
+    t.eq("拒绝行有清理时间", refused["cleanup_at"] > 0, True)
     t.eq("拒绝计入统计", o.stats["refused"], 1)
     t.eq("拒绝仍写进任务账本",
          [(r["status"], r["error_code"]) for r in db.list_tasks(bot_id=origin)],
@@ -5492,6 +5625,7 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
     t.eq("拒绝写一条审计",
          [(r["stage"], r["event"], r["level"]) for r in db.audit_replay(early)],
          [("orchestrator", "refused", "warn")])
+    t.eq("拒绝审计写明原因码", [r["detail"] for r in db.audit_replay(early)], ["no_grant"])
     t.eq("审计记下发起方与关联号",
          [(r["correlation_id"], r["bot_id"]) for r in db.audit_replay(early)], [(early, origin)])
 
@@ -5517,9 +5651,10 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
 
     # ------------------------------------------------------------------ 放行与上下文
     grant = db.grant_agent_task(origin, beta, "ledger.profile", max_hops=2, timeout_seconds=10.0)
-    t.eq("授权十列", sorted(grant),
+    t.eq("授权十一列", sorted(grant),
          ["capability", "created_at", "enabled", "id", "max_concurrent", "max_hops",
-          "origin_bot_id", "target_bot_id", "timeout_seconds", "updated_at"])
+          "origin_bot_id", "require_approval", "target_bot_id", "timeout_seconds", "updated_at"])
+    t.eq("授权默认不要求审批", grant["require_approval"], 0)
     t.eq("同三元组幂等覆盖",
          db.grant_agent_task(origin, beta, "ledger.profile", max_hops=2, timeout_seconds=10.0)["id"],
          grant["id"])
@@ -5538,7 +5673,8 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
     db.grant_agent_task(origin, beta, "router.plan", max_hops=99, timeout_seconds=10.0)
 
     ok = dispatch(origin, beta, "ledger.profile", {"include_counts": True})
-    t.eq("授权后成功", ok["status"], "succeeded")
+    t.eq("授权后成功落在 workspace_cleanup", ok["status"], "workspace_cleanup")
+    t.eq("成功派生 succeeded", ok["outcome"], "succeeded")
     t.eq("结果就是执行体的返回", ok["result"], {"ok": True, "counts": True, "target": beta})
     t.eq("执行体拿到八段上下文", sorted(captured),
          ["args", "bot_id", "capability", "correlation_id", "deadline_seconds", "hops",
@@ -5553,16 +5689,21 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
     t.eq("成功行有关闭时间", ok["finished_at"] >= ok["created_at"], True)
     t.eq("成功行记录延迟", isinstance(ok["latency_ms"], float), True)
     t.eq("结果原样落库", db.get_task(ok["id"])["result"], ok["result"])
+    t.eq("任务行存着签发时的画像", ok["profile"], normalize_profile({}))
     t.eq("成功计入统计", o.stats["succeeded"], 1)
     t.eq("落定后在途清空", o.snapshot()["inflight"], [])
     thread = str(ok["correlation_id"])
-    t.eq("成功写审计两条且顺序正确",
+    t.eq("成功审计写满七步",
          [(r["event"], r["level"]) for r in db.audit_replay(thread)],
-         [("dispatch", "info"), ("succeeded", "info")])
+         [("dispatch", "info"), ("authorized", "info"), ("scheduled", "info"),
+          ("allocated", "info"), ("running", "info"), ("completed", "info"),
+          ("workspace_cleanup", "info")])
     t.eq("审计数据段带任务号/能力/跳数",
          [(r["data"]["task_id"], r["data"]["capability"], r["data"]["hops"])
           for r in db.audit_replay(thread)],
-         [(ok["id"], "ledger.profile", 1), (ok["id"], "ledger.profile", 1)])
+         [(ok["id"], "ledger.profile", 1)] * 7)
+    t.eq("迁移/审批字段在成功行上保持初始值",
+         (ok["approved_at"], ok["approval_required"]), (0.0, False))
 
     # ------------------------------------------------------------------ 通配与禁用
     db.set_grant_enabled(grant["id"], False)
@@ -5572,11 +5713,12 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
     t.eq("只读清单能筛出生效项", sorted(g["id"] for g in db.list_grants(enabled_only=True)),
          sorted(g["id"] for g in db.list_grants() if g["id"] != grant["id"]))
     db.set_grant_enabled(grant["id"], True)
-    t.eq("重新启用即放行", dispatch(origin, beta, "ledger.profile", {})["status"], "succeeded")
+    t.eq("重新启用即放行", dispatch(origin, beta, "ledger.profile", {})["status"],
+         "workspace_cleanup")
     t.eq("改不存在的授权返回 None", db.set_grant_enabled(999999, True), None)
     wild = db.grant_agent_task(origin, gamma, GRANT_WILDCARD)
     t.eq("通配授权覆盖已注册能力",
-         dispatch(origin, gamma, "ledger.profile", {})["status"], "succeeded")
+         dispatch(origin, gamma, "ledger.profile", {})["status"], "workspace_cleanup")
     exact = db.grant_agent_task(origin, gamma, "ledger.profile", timeout_seconds=7.5)
     t.eq("精确授权优先于通配", db.find_grant(origin, gamma, "ledger.profile")["id"], exact["id"])
     t.eq("删除授权", db.delete_grant(wild["id"]), True)
@@ -5587,7 +5729,23 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
     t.raises("非法任务状态无法入库", Exception, db.create_task,
              correlation_id="x", origin_bot_id=origin, target_bot_id=beta,
              capability="ledger.profile", status="done")
+    for old_status in ("queued", "succeeded", "timeout"):
+        t.raises(f"旧状态 {old_status} 不能写入", Exception, db.create_task,
+                 correlation_id="x", origin_bot_id=origin, target_bot_id=beta,
+                 capability="ledger.profile", status=old_status)
+    t.raises("非法留存模式无法入库", Exception, db.create_task,
+             correlation_id="x", origin_bot_id=origin, target_bot_id=beta,
+             capability="ledger.profile", status="created", retention_mode="forever")
     t.raises("任务行不可改关联号", Exception, db.update_task, ok["id"], correlation_id="nope")
+    t.raises("留存模式不可事后改写", Exception, db.update_task, ok["id"], retention_mode="ephemeral")
+    t.raises("审批标记不可事后改写", Exception, db.update_task, ok["id"], approval_required=True)
+    manual = db.create_task(correlation_id="manual", origin_bot_id=origin, target_bot_id=beta,
+                            capability="ledger.profile", status="created",
+                            profile={"compute": {"isolation": "sandbox"}},
+                            retention_mode="ephemeral", approval_required=True)
+    t.eq("画像原样落库", manual["profile"], {"compute": {"isolation": "sandbox"}})
+    t.eq("审批标记写入", manual["approval_required"], True)
+    t.eq("手动创建的悬挂行派生 pending", (manual["outcome"], manual["status"]), ("pending", "created"))
 
     # ------------------------------------------------------------------ 超时熔断
     db.grant_agent_task(origin, beta, "calendar.availability", timeout_seconds=TASK_TIMEOUT_MIN_SECONDS)
@@ -5612,7 +5770,8 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
 
     fused = h.async_run(fuse_probe)
     row = fused["outcome"]
-    t.eq("卡住的任务被熔断", row["status"], "timeout")
+    t.eq("卡住的任务熔断成 failed", row["status"], "failed")
+    t.eq("熔断的派生结果也是 failed", row["outcome"], "failed")
     t.eq("熔断原因码", row["error_code"], "timeout")
     t.eq("熔断写明预算", row["detail"], f"{TASK_TIMEOUT_MIN_SECONDS:.3f}s")
     t.eq("熔断前确实处于 running", fused["mid"], "running")
@@ -5620,10 +5779,13 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
     t.eq("熔断后在途清空", o.snapshot()["inflight"], [])
     t.eq("熔断没有等满执行体", row["latency_ms"] < 1500.0, True)
     t.eq("熔断计入统计", o.stats["timeout"], 1)
+    t.eq("熔断也计入失败", o.stats["failed"] >= 1, True)
     t.eq("熔断不落结果", row["result"], {})
     t.eq("熔断写审计",
-         [(r["event"], r["level"]) for r in db.audit_replay("fuse") if r["event"] == "timeout"],
-         [("timeout", "warn")])
+         [(r["event"], r["level"]) for r in db.audit_replay("fuse") if r["event"] == "failed"],
+         [("failed", "warn")])
+    t.eq("熔断审计写明 timeout",
+         [r["detail"] for r in db.audit_replay("fuse") if r["event"] == "failed"], ["timeout"])
     o.register("calendar.availability", bloated)
 
     # ------------------------------------------------------------------ 执行体异常与打码
@@ -5642,7 +5804,7 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
     t.check("审计行不外泄密钥形状",
             all(n not in json.dumps(audit_rows, ensure_ascii=False) for n in needles),
             str(audit_rows)[:200])
-    t.eq("失败计入统计", o.stats["failed"], 1)
+    t.eq("失败计入统计", o.stats["failed"] >= 2, True)
     t.eq("异常路径不落结果", boom["result"], {})
 
     wrong = dispatch(origin, beta, "router.plan", {"text": "非映射"})
@@ -5654,8 +5816,13 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
          ("failed", "executor_error"))
     t.contains("体积闸写出上限值", big["detail"], str(TASK_RESULT_MAX_CHARS))
     t.eq("超体积的行不留半成品结果", big["result"], {})
+    seen_statuses = {r["status"] for r in db.list_tasks(limit=1000)}
+    t.eq("账本里的状态全在 11 态词表内", sorted(seen_statuses - set(TASK_STATUSES)), [])
+    t.eq("旧三态在 v7 账本里绝迹", sorted(seen_statuses & {"queued", "succeeded", "timeout"}), [])
     t.eq("没有任何任务停在 running", db.list_tasks(status="running"), [])
-    t.eq("没有任何任务停在 queued", db.list_tasks(status="queued"), [])
+    t.eq("全程没有越过 completed 直接收口的成功行",
+         [r["id"] for r in db.list_tasks(limit=1000)
+          if r["status"] == "completed"], [])
 
     # ------------------------------------------------------------------ 跳数 / 回环 / 并发
     db.grant_agent_task(origin, beta, "router.plan", max_hops=1, timeout_seconds=10.0)
@@ -5663,7 +5830,7 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
     t.eq("超跳数被拒", (hop["status"], hop["error_code"]), ("refused", "hop_budget"))
     t.contains("跳数闸写明预算", hop["detail"], "hops 2 > 1")
     parent = dispatch(origin, beta, "router.plan", {"text": "一跳"}, hops=1)
-    t.eq("跳数在预算内放行", parent["status"], "succeeded")
+    t.eq("跳数在预算内放行", parent["status"], "workspace_cleanup")
     t.eq("授权跳数超过全局上限也拒",
          dispatch(origin, beta, "ledger.profile", {}, hops=MAX_TASK_HOPS + 1)["error_code"],
          "hop_budget")
@@ -5674,14 +5841,15 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
     t.eq("A→B 之后再派回 A 判回环", (loop["status"], loop["error_code"]), ("refused", "cycle"))
     t.contains("回环写明链长", loop["detail"], "祖先链")
     outside = dispatch(beta, delta, "ledger.profile", {}, parent_id=parent["id"])
-    t.eq("链上没有的 Bot 不受回环闸影响", outside["status"], "succeeded")
+    t.eq("链上没有的 Bot 不受回环闸影响", outside["status"], "workspace_cleanup")
     t.eq("子任务沿用父任务关联号", outside["correlation_id"], parent["correlation_id"])
     t.eq("调用方点名关联号时优先于继承",
          dispatch(beta, delta, "ledger.profile", {}, parent_id=parent["id"],
                   correlation_id="named-thread")["correlation_id"], "named-thread")
     t.eq("父任务号入库", outside["parent_id"], parent["id"])
     t.eq("陌生父号不会被误判成回环",
-         dispatch(beta, delta, "ledger.profile", {}, parent_id="task_nope_9999")["status"], "succeeded")
+         dispatch(beta, delta, "ledger.profile", {}, parent_id="task_nope_9999")["status"],
+         "workspace_cleanup")
 
     async def contend() -> list:
         def sleeper(ctx: Dict[str, Any]) -> Any:
@@ -5700,7 +5868,8 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
         ))
 
     raced = h.async_run(contend)
-    t.eq("并发预算只放一条", sorted(r["status"] for r in raced), ["refused", "succeeded"])
+    t.eq("并发预算只放一条", sorted(r["status"] for r in raced),
+         ["refused", "workspace_cleanup"])
     t.eq("超额那条是 busy", [r["error_code"] for r in raced if r["status"] == "refused"], ["busy"])
     t.contains("busy 写明占用比", raced[1]["detail"], "1/1")
     t.eq("并发闸不落悬挂行", db.list_tasks(status="running", capability="workspace.summarize"), [])
@@ -5797,11 +5966,11 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
     t.eq("扇出总数按去重后算", fan["total"], 3)
     t.eq("扇出成功一条", fan["succeeded"], 1)
     t.eq("部分成功不算整体失败", fan["partial"], True)
-    t.eq("扇出逐目标给状态", [r["status"] for r in fan["targets"]],
-         ["succeeded", "failed", "failed"])
+    t.eq("扇出逐目标给存储状态", [r["status"] for r in fan["targets"]],
+         ["workspace_cleanup", "failed", "failed"])
     t.eq("扇出逐目标给原因码", [r["error_code"] for r in fan["targets"]],
          ["", "executor_error", "executor_error"])
-    t.eq("扇出计数与逐目标一致", fan["counts"], {"succeeded": 1, "failed": 2})
+    t.eq("扇出计数与逐目标一致", fan["counts"], {"workspace_cleanup": 1, "failed": 2})
     t.eq("扇出逐目标带任务号", [bool(r.get("task_id")) for r in fan["targets"]], [True, True, True])
     t.eq("扇出预算取最紧超时加一秒", fan["budget_seconds"], 11.0)
     t.eq("扇出预算不越全局上限", fan["budget_seconds"] <= FANOUT_BUDGET_MAX_SECONDS, True)
@@ -5848,7 +6017,7 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
     t.eq("回放任务数等于扇出目标数", len(rep["tasks"]), 3)
     t.eq("回放事件数等于审计长度", rep["events"], len(rep["audit"]))
     t.eq("回放按能力计数", rep["capabilities"], {"router.plan": 3})
-    t.eq("回放按状态计数", rep["statuses"], {"succeeded": 1, "failed": 2})
+    t.eq("回放按状态计数", rep["statuses"], {"workspace_cleanup": 1, "failed": 2})
     t.eq("回放审计按时间正序",
          [r["ts"] for r in rep["audit"]], sorted(r["ts"] for r in rep["audit"]))
     t.eq("回放每行审计都带关联号",
@@ -5878,8 +6047,214 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
     t.eq("审计阶段名第十段是编排器", AUDIT_STAGES[-1], "orchestrator")
     t.eq("编排器用的阶段名在册", AUDIT_STAGES.index("orchestrator"), 9)
 
-    # ------------------------------------------------------------------ 不是桩
-    # ------------------------------------------------------------------ 不是桩：真实装配的五个投影
+    # ------------------------------------------------------------------ 执行画像
+    defaults = normalize_profile({})
+    t.eq("默认画像三段", sorted(defaults), ["compute", "permissions", "privacy"])
+    t.eq("默认算力三段", defaults["compute"],
+         {"preferred_node": "", "isolation": "process",
+          "max_runtime_seconds": DEFAULT_MAX_RUNTIME_SECONDS})
+    t.eq("默认隐私两段", defaults["privacy"],
+         {"retention_mode": "user_owned", "memory_write_approval": False})
+    t.eq("默认权限三段全空", defaults["permissions"],
+         {"files": [], "browser": [], "network": []})
+    t.eq("非映射输入回默认画像", normalize_profile("nope"), defaults)
+    clamped = normalize_profile({
+        "compute": {"preferred_node": "n" * 80, "isolation": "vm", "max_runtime_seconds": 999},
+        "privacy": {"retention_mode": "forever", "memory_write_approval": "true"},
+        "permissions": {"files": ["/a", "/a", "", "x" * 70], "browser": "nope",
+                        "network": [1, "smp1"]},
+    })
+    t.eq("越界运行时长夹到上限", clamped["compute"]["max_runtime_seconds"], MAX_RUNTIME_SECONDS)
+    t.eq("未知隔离回默认", clamped["compute"]["isolation"], "process")
+    t.eq("节点名截到 64", len(clamped["compute"]["preferred_node"]), 64)
+    t.eq("未知留存回 user_owned", clamped["privacy"]["retention_mode"], "user_owned")
+    t.eq("字符串 'true' 不是布尔真", clamped["privacy"]["memory_write_approval"], False)
+    t.eq("权限列表去重且剔空", clamped["permissions"]["files"], ["/a", "x" * 64])
+    t.eq("非列表权限字段落空", clamped["permissions"]["browser"], [])
+    t.eq("列表里的数字转成字符串", clamped["permissions"]["network"], ["1", "smp1"])
+    t.eq("运行时长有下限",
+         normalize_profile({"compute": {"max_runtime_seconds": 0.01}})["compute"]["max_runtime_seconds"],
+         MIN_RUNTIME_SECONDS)
+    t.eq("非数字运行时长回默认",
+         normalize_profile({"compute": {"max_runtime_seconds": "soon"}})["compute"]["max_runtime_seconds"],
+         DEFAULT_MAX_RUNTIME_SECONDS)
+    t.eq("无穷大运行时长回默认",
+         normalize_profile({"compute": {"max_runtime_seconds": float("inf")}})["compute"]["max_runtime_seconds"],
+         DEFAULT_MAX_RUNTIME_SECONDS)
+
+    p_origin = str(db.create_bot("orchp0", 5410)["id"])
+    p_target = str(db.create_bot("orchp1", 5411)["id"])
+    p_throw = str(db.create_bot("orchp2", 5412)["id"])
+    db.grant_agent_task(p_origin, p_target, "ledger.profile", timeout_seconds=10.0)
+    db.grant_agent_task(p_origin, p_throw, "ledger.profile", timeout_seconds=10.0)
+    profiles[p_target] = {
+        "compute": {"max_runtime_seconds": 3.5, "isolation": "sandbox", "preferred_node": "mac-mini"},
+        "privacy": {"retention_mode": "zero_retention"},
+    }
+    zero = dispatch(p_origin, p_target, "ledger.profile", {"include_counts": True})
+    t.eq("画像可以把超时收紧", zero["timeout_seconds"], 3.5)
+    t.eq("超时不敢越过授权", zero["timeout_seconds"] <= 10.0, True)
+    t.eq("任务行存着归一化后的画像", zero["profile"], normalize_profile(profiles[p_target]))
+    t.eq("画像里的隔离进任务行", zero["profile"]["compute"]["isolation"], "sandbox")
+    t.eq("零留存在落库前抹掉正文", zero["result"],
+         {"redacted": True, "retention_mode": "zero_retention"})
+    t.eq("零留存任务仍算成功", (zero["status"], zero["outcome"]),
+         ("workspace_cleanup", "succeeded"))
+    t.eq("留存标签随任务行", zero["retention_mode"], "zero_retention")
+
+    exploding.add(p_throw)
+    degraded = dispatch(p_origin, p_throw, "ledger.profile", {})
+    t.eq("画像读不出来不阻断派发", degraded["status"], "workspace_cleanup")
+    t.eq("读不出来按默认画像", degraded["profile"], normalize_profile({}))
+    t.eq("超时退回授权值", degraded["timeout_seconds"], 10.0)
+    exploding.discard(p_throw)
+
+    profiles[p_target]["privacy"]["retention_mode"] = "ephemeral"
+    eph = dispatch(p_origin, p_target, "ledger.profile", {"include_counts": True})
+    t.eq("ephemeral 的结果随清理抹除", eph["result"], {})
+    t.eq("ephemeral 在清理摘要留痕", eph["cleanup_detail"].endswith(";result_purged"), True)
+    profiles[p_target]["privacy"]["retention_mode"] = "user_owned"
+    owned = dispatch(p_origin, p_target, "ledger.profile", {})
+    t.eq("user_owned 的结果留在账本", owned["result"]["ok"], True)
+
+    # ------------------------------------------------------------------ 工作区清理
+    clean_calls: list = []
+    clean_mode = {"mode": "ok"}
+
+    def cleanup_hook(task: Dict[str, Any]) -> Any:
+        clean_calls.append(dict(task))
+        if clean_mode["mode"] == "raise":
+            raise RuntimeError("scratch busy")
+        if clean_mode["mode"] == "string":
+            return "done"
+        return {"removed": True, "path": f"task-scratch/{task['id']}"}
+
+    o.attach_hooks(cleanup=cleanup_hook)
+    before_clean = o.stats["cleanup"]
+    cleaned = dispatch(p_origin, p_target, "ledger.profile", {})
+    t.eq("成功终态跑一次清理", cleaned["cleanup_detail"],
+         json.dumps({"removed": True, "path": f"task-scratch/{cleaned['id']}"},
+                    ensure_ascii=False, sort_keys=True))
+    t.eq("清理时间不早于完成时间", cleaned["cleanup_at"] >= cleaned["finished_at"], True)
+    t.eq("清理回调拿到整行任务", clean_calls[-1]["id"], cleaned["id"])
+    t.eq("清理计数加一", o.stats["cleanup"], before_clean + 1)
+
+    clean_mode["mode"] = "raise"
+    dirty = dispatch(p_origin, p_target, "ledger.profile", {})
+    t.eq("清理失败不改判结果", dirty["status"], "workspace_cleanup")
+    t.check("清理失败留下原因", dirty["cleanup_detail"].startswith("error:"), dirty["cleanup_detail"])
+    t.contains("清理失败写明异常", dirty["cleanup_detail"], "scratch busy")
+    t.eq("清理失败不计数", o.stats["cleanup"], before_clean + 1)
+
+    clean_mode["mode"] = "string"
+    shaped = dispatch(p_origin, p_target, "ledger.profile", {})
+    t.eq("非映射清理结果记成 ok", shaped["cleanup_detail"], "ok")
+    t.eq("非映射也算跑过清理", o.stats["cleanup"], before_clean + 2)
+    clean_mode["mode"] = "ok"
+
+    abandoned = str(db.create_bot("orchp3", 5413)["id"])
+    refused_clean = dispatch(p_origin, abandoned, "ledger.profile", {})
+    t.eq("拒绝的终态同样触发清理", refused_clean["status"], "refused")
+    t.check("拒绝行带清理摘要", refused_clean["cleanup_detail"].startswith("{"),
+            refused_clean["cleanup_detail"])
+    failed_clean = dispatch(p_origin, p_throw, "ledger.profile", {}, hops=MAX_TASK_HOPS + 1)
+    t.eq("跳数拒绝的终态也触发清理", failed_clean["status"], "refused")
+
+    # ------------------------------------------------------------------ 审批闸
+    ap_origin = str(db.create_bot("orchap0", 5430)["id"])
+    ap_target = str(db.create_bot("orchap1", 5431)["id"])
+    db.grant_agent_task(ap_origin, ap_target, "ledger.profile", max_concurrent=1,
+                        timeout_seconds=10.0, require_approval=True)
+    t.eq("授权行可以要求审批",
+         db.find_grant(ap_origin, ap_target, "ledger.profile")["require_approval"], 1)
+    held = dispatch(ap_origin, ap_target, "ledger.profile", {})
+    t.eq("需审批的任务停在 awaiting_user", held["status"], "awaiting_user")
+    t.eq("等审批的派生结果是 pending", held["outcome"], "pending")
+    t.eq("等审批的行带审批标记", held["approval_required"], True)
+    t.eq("等审批还没有批准时间", held["approved_at"], 0.0)
+    t.eq("等审批不落结果", held["result"], {})
+    t.eq("等审批占着并发额度", db.count_active_tasks(ap_target, "ledger.profile"), 1)
+    t.eq("等审批的审计链",
+         [r["event"] for r in db.audit_replay(str(held["correlation_id"]))],
+         ["dispatch", "authorized", "scheduled", "allocated", "running", "awaiting_user"])
+    second = dispatch(ap_origin, ap_target, "ledger.profile", {})
+    t.eq("等待中的任务计入并发预算", (second["status"], second["error_code"]),
+         ("refused", "busy"))
+    t.eq("awaiting_user 计数", o.stats["awaiting_user"] >= 1, True)
+
+    resumed = h.async_run(o.resolve_approval, held["id"], True)
+    t.eq("批准后任务跑完并清理", (resumed["status"], resumed["outcome"]),
+         ("workspace_cleanup", "succeeded"))
+    t.eq("批准时间落库", resumed["approved_at"] > 0, True)
+    t.eq("批准后的审计续上三步",
+         [r["event"] for r in db.audit_replay(str(held["correlation_id"]))][-3:],
+         ["approved", "completed", "workspace_cleanup"])
+    t.eq("批准后并发额度释放", db.count_active_tasks(ap_target, "ledger.profile"), 0)
+    try:
+        h.async_run(o.resolve_approval, held["id"], True)
+        t.check("已落定的任务不能再批准", False, "没抛")
+    except OrchestratorError as exc:
+        t.eq("已落定任务的批准错误码", exc.code, "not_awaiting")
+
+    declined_task = dispatch(ap_origin, ap_target, "ledger.profile", {})
+    declined = h.async_run(o.resolve_approval, declined_task["id"], False)
+    t.eq("主人拒绝落在 cancelled", declined["status"], "cancelled")
+    t.eq("拒绝原因码", declined["error_code"], "declined")
+    t.eq("拒绝写明 declined", declined["detail"], "declined")
+    t.eq("拒绝的派生结果", declined["outcome"], "cancelled")
+    t.eq("拒绝写一条 warn 审计",
+         [(r["event"], r["level"]) for r in db.audit_replay(str(declined_task["correlation_id"]))
+          if r["event"] == "declined"], [("declined", "warn")])
+    t.eq("declined 计数", o.stats["declined"] >= 1, True)
+    try:
+        h.async_run(o.resolve_approval, "tk_000000000000", True)
+        t.check("批准不存在的任务被拒", False, "没抛")
+    except OrchestratorError as exc:
+        t.eq("批准不存在任务的错误码", exc.code, "not_found")
+
+    awaiting_cancel = dispatch(ap_origin, ap_target, "ledger.profile", {})
+    cut_await = o.cancel(awaiting_cancel["id"])
+    t.eq("等审批的任务可以直接取消", cut_await["status"], "cancelled")
+    t.eq("等审批取消写明操作者", cut_await["detail"], "operator")
+
+    mp_origin = str(db.create_bot("orchmp0", 5432)["id"])
+    mp_target = str(db.create_bot("orchmp1", 5433)["id"])
+    db.grant_agent_task(mp_origin, mp_target, "ledger.profile", timeout_seconds=10.0)
+    profiles[mp_target] = {"privacy": {"memory_write_approval": True}}
+    mp = dispatch(mp_origin, mp_target, "ledger.profile", {})
+    t.eq("画像要求写记忆审批同样挂起", mp["status"], "awaiting_user")
+    t.eq("画像审批的任务也带标记", mp["approval_required"], True)
+    o.cancel(mp["id"])
+    profiles[mp_target] = {}
+
+    ng_target = str(db.create_bot("orchng0", 5434)["id"])
+    profiles[ng_target] = {"privacy": {"memory_write_approval": True}}
+    nothing = dispatch(mp_origin, ng_target, "ledger.profile", {})
+    t.eq("审批画像不能替代授权", (nothing["status"], nothing["error_code"]),
+         ("refused", "no_grant"))
+    profiles[ng_target] = {}
+
+    # ------------------------------------------------------------------ 状态监听
+    seen_states: list = []
+
+    def state_hook(row: Dict[str, Any]) -> None:
+        seen_states.append(str(row.get("status")))
+
+    o.attach_hooks(state=state_hook)
+    watched = dispatch(mp_origin, mp_target, "ledger.profile", {})
+    t.eq("状态监听看到完整的七步",
+         seen_states, ["created", "authorized", "scheduled", "allocated", "running",
+                       "completed", "workspace_cleanup"])
+    t.eq("监听只用于旁路不改结果", watched["status"], "workspace_cleanup")
+
+    def bad_state(row: Dict[str, Any]) -> None:
+        raise RuntimeError("卡片通道断了")
+
+    o.attach_hooks(state=bad_state)
+    survive = dispatch(mp_origin, mp_target, "ledger.profile", {})
+    t.eq("状态监听抛错不影响状态机", survive["status"], "workspace_cleanup")
+
+    # ------------------------------------------- 不是桩：真实装配的五个投影与四个任务端点
     from datetime import datetime as _dt, timezone as _tzutc
     from .mac_node_bridge import CACHE_SOURCE
 
@@ -5893,6 +6268,8 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
     peer = str(real.db.create_bot("orchpeer", 5395, display_name="对端")["id"])
     denied = h.async_run(ro.dispatch, rb, peer, "ledger.profile", {})
     t.eq("真装配默认拒绝", (denied["status"], denied["error_code"]), ("refused", "no_grant"))
+    t.eq("真装配的拒绝也跑清理回调", denied["cleanup_detail"],
+         '{"reason": "absent", "removed": false}')
     try:
         h.async_run(ro.dispatch, "bot_nope_7777", peer, "ledger.profile", {})
         t.check("陌生发起方仍然先被挡下", False, "没抛")
@@ -5901,6 +6278,9 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
     real.db.grant_agent_task(rb, peer, GRANT_WILDCARD, timeout_seconds=10.0)
     prof = h.async_run(ro.dispatch, rb, peer, "ledger.profile", {})
     t.eq("真投影读到目标 Bot 自己的名字", prof["result"].get("name"), "orchpeer")
+    t.eq("真任务落在成功终态", (prof["status"], prof["outcome"]),
+         ("workspace_cleanup", "succeeded"))
+    t.eq("真清理摘要记进任务行", prof["cleanup_detail"], '{"reason": "absent", "removed": false}')
     t.eq("真投影给十一段画像", sorted(prof["result"]),
          ["active_tasks", "bot_id", "default_locale", "display_name", "messages_in",
           "messages_out", "name", "reply_rules", "routing_rules", "status", "timezone"])
@@ -6013,10 +6393,91 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
     t.eq("真投影的审计只落在编排器阶段",
          sorted({r["stage"] for r in replay_real["audit"]}), ["orchestrator"])
     t.eq("真投影的审计事件正序", [r["event"] for r in replay_real["audit"]][:2],
-         ["dispatch", "succeeded"])
+         ["dispatch", "authorized"])
+    t.eq("真投影的审计走到成功终态", replay_real["audit"][-1]["event"], "workspace_cleanup")
     t.eq("快照列出的可用投影",
          sorted(r["capability"] for r in ro.snapshot()["capabilities"] if r["available"]),
          sorted(CAPABILITY_SPECS))
+
+    # ------------------------------------------------------ HTTP 任务 API（v1）
+    from .agent_admin import ADMIN_PREFIX as ADMIN_API  # noqa: PLC0415
+
+    hc, _built = h.client(real)
+    auth = h.auth()
+    h_origin = str(real.db.create_bot("orchh0", 5474)["id"])
+    h_target = str(real.db.create_bot("orchh1", 5475)["id"])
+    t.eq("任务详情接口未鉴权被拒",
+         hc.get("/api/v1/tasks/tk_000000000000").status_code, 401)
+    t.eq("任务创建接口未鉴权被拒",
+         hc.post("/api/v1/tasks", json={}).status_code, 401)
+    t.eq("批准接口未鉴权被拒",
+         hc.post("/api/v1/tasks/tk_000000000000/approve", json={}).status_code, 401)
+    t.eq("编排面板未鉴权被拒", hc.get(ADMIN_API + "/orch").status_code, 401)
+    no_grant = hc.post("/api/v1/tasks", headers=auth,
+                       json={"origin_bot_id": h_origin, "target_bot_id": h_target,
+                             "capability": "ledger.profile", "args": {}})
+    t.eq("HTTP 无授权也是 200 + refused 行", no_grant.status_code, 200)
+    t.eq("HTTP 拒绝原因码", no_grant.json()["task"]["error_code"], "no_grant")
+    grant_resp = hc.post(ADMIN_API + "/orch/grants", headers=auth,
+                         json={"origin_bot_id": h_origin, "target_bot_id": h_target,
+                               "capability": "ledger.profile", "timeout_seconds": 10,
+                               "require_approval": "true"})
+    t.eq("控制台可写要求审批的授权", grant_resp.json()["grant"]["require_approval"], 1)
+    created_resp = hc.post("/api/v1/tasks", headers=auth,
+                           json={"origin_bot_id": h_origin, "target_bot_id": h_target,
+                                 "capability": "ledger.profile", "args": {}})
+    t.eq("HTTP 创建成功", created_resp.status_code, 200)
+    created = created_resp.json()["task"]
+    t.eq("HTTP 创建的任务停在等审批", created["status"], "awaiting_user")
+    detail = hc.get("/api/v1/tasks/" + created["id"], headers=auth).json()
+    t.eq("任务详情三段", sorted(detail), ["children", "ok", "task"])
+    t.eq("新任务的子任务是空列表", detail["children"], [])
+    t.eq("任务详情带派生 outcome", detail["task"]["outcome"], "pending")
+    t.eq("未知任务 404",
+         hc.get("/api/v1/tasks/tk_000000000000", headers=auth).status_code, 404)
+    approved = hc.post("/api/v1/tasks/" + created["id"] + "/approve", headers=auth, json={})
+    t.eq("HTTP 批准返回 200", approved.status_code, 200)
+    t.eq("HTTP 批准回执带 approved", approved.json()["approved"], True)
+    t.eq("HTTP 批准后落成功终态", approved.json()["task"]["status"], "workspace_cleanup")
+    t.eq("真实清理回调写入摘要", approved.json()["task"]["cleanup_detail"],
+         '{"reason": "absent", "removed": false}')
+    t.eq("重复批准返回 409",
+         hc.post("/api/v1/tasks/" + created["id"] + "/approve", headers=auth,
+                 json={}).status_code, 409)
+    t.eq("已完成任务取消返回 409",
+         hc.post("/api/v1/tasks/" + created["id"] + "/cancel", headers=auth,
+                 json={}).status_code, 409)
+    pending_cancel = hc.post("/api/v1/tasks", headers=auth,
+                             json={"origin_bot_id": h_origin, "target_bot_id": h_target,
+                                   "capability": "ledger.profile", "args": {}}).json()["task"]
+    cut_resp = hc.post("/api/v1/tasks/" + pending_cancel["id"] + "/cancel", headers=auth, json={})
+    t.eq("HTTP 取消等审批任务", cut_resp.json()["task"]["status"], "cancelled")
+    decline_task = hc.post("/api/v1/tasks", headers=auth,
+                           json={"origin_bot_id": h_origin, "target_bot_id": h_target,
+                                 "capability": "ledger.profile", "args": {}}).json()["task"]
+    declined_resp = hc.post("/api/v1/tasks/" + decline_task["id"] + "/approve", headers=auth,
+                            json={"approved": False})
+    t.eq("HTTP 可以显式拒绝", declined_resp.json()["approved"], False)
+    t.eq("HTTP 拒绝落在 cancelled", declined_resp.json()["task"]["status"], "cancelled")
+    t.eq("HTTP 拒绝写明 declined", declined_resp.json()["task"]["error_code"], "declined")
+    listing = hc.get(ADMIN_API + "/orch/tasks", headers=auth,
+                     params={"bot_id": h_origin}).json()
+    t.eq("任务列表总数与逐行一致", listing["total"], len(listing["tasks"]))
+    t.check("任务列表按 Bot 过滤", all(
+        h_origin in (row["origin_bot_id"], row["target_bot_id"]) for row in listing["tasks"]),
+        str(listing["tasks"])[:160])
+    snap_http = hc.get(ADMIN_API + "/orch", headers=auth, params={"bot_id": h_origin}).json()
+    t.eq("编排面板快照九段", sorted(snap_http),
+         ["capabilities", "grants", "inflight", "ledger", "limits", "ok", "profile", "stats",
+          "tasks"])
+
+    page = STATIC_PAGE.read_text(encoding="utf-8")
+    t.contains("控制台接上任务 API", page, 'TASK_API = "/api/v1/tasks"')
+    t.contains("控制台批准按钮走任务端点", page,
+               'TASK_API + "/" + encodeURIComponent(k.id) + "/approve"')
+    t.contains("状态色覆盖成功终态", page, '.st[data-s="workspace_cleanup"]')
+    t.contains("状态色覆盖等审批", page, '.st[data-s="awaiting_user"]')
+
     real.db.delete_bot(peer, hard=True)
     try:
         h.async_run(ro.dispatch, rb, peer, "ledger.profile", {})
@@ -6024,6 +6485,7 @@ def group_orchestration(test: SelfTest, h: Harness) -> None:
     except OrchestratorError as exc:
         t.eq("目标被删后的错误码", exc.code, "unknown_target")
     db.close()
+
 
 
 def group_qrcode_diag(test: SelfTest, h: Harness) -> None:

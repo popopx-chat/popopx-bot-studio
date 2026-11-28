@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .i18n import FALLBACK_LOCALE, LOCALES, normalize_locale, placeholders
 
-# 话术种类：日历答复 / 提案确认 / 纪要 / 访客 / A2A 协商 / 过期。
+# 话术种类：日历答复 / 提案确认 / 纪要 / 访客 / A2A 协商 / 过期 / 任务卡片四型与留存标签。
 KINDS: Tuple[str, ...] = (
     "availability_answer",
     "availability_none",
@@ -36,6 +36,16 @@ KINDS: Tuple[str, ...] = (
     "negotiation_converged",
     "negotiation_failed",
     "proposal_expired",
+    "task_progress_title",
+    "task_progress_body",
+    "task_approval_title",
+    "task_approval_body",
+    "task_choice_title",
+    "task_choice_body",
+    "task_result_title",
+    "retention_zero",
+    "retention_ephemeral",
+    "retention_user_owned",
 )
 
 # Needle 3 抽到的工具名 -> 回天话术种类。提案落库后的确认文案走 *  _confirm 三条。
@@ -131,6 +141,16 @@ CATALOG["en"] = {
     "proposal_expired": (
         "{title} on {start} was not confirmed in time, so nothing was written to the calendar."
     ),
+    "task_progress_title": "Task progress: {task}",
+    "task_progress_body": "{label} — step {step} of {total} ({percent}%).",
+    "task_approval_title": "Approval needed: {task}",
+    "task_approval_body": "Permission scope: {capability} — {scope}. Nothing runs until you approve.",
+    "task_choice_title": "Choose an option: {task}",
+    "task_choice_body": "{question} Options: {options}.",
+    "task_result_title": "Task result ({outcome}): {task}",
+    "retention_zero": "{task}: the result was not stored (zero retention).",
+    "retention_ephemeral": "{task}: the result is cleared when the task ends.",
+    "retention_user_owned": "{task}: the result stays in your own workspace.",
 }
 
 CATALOG["zh-Hans"] = {
@@ -146,6 +166,16 @@ CATALOG["zh-Hans"] = {
     "negotiation_converged": "我与 {peer} 已敲定 {start}，时长 {duration} 分钟，正在发送邀请。",
     "negotiation_failed": "没能和 {peer} 找到共同空档：{reason}。需要我再提个别的时间吗？",
     "proposal_expired": "{start} 的「{title}」未在规定时间内确认，日历未做任何改动。",
+    "task_progress_title": "任务进度：{task}",
+    "task_progress_body": "{label} —— 第 {step}/{total} 步（{percent}%）。",
+    "task_approval_title": "需要批准：{task}",
+    "task_approval_body": "权限范围：{capability} —— {scope}。你批准前不会执行任何操作。",
+    "task_choice_title": "请选择：{task}",
+    "task_choice_body": "{question} 选项：{options}。",
+    "task_result_title": "任务结果（{outcome}）：{task}",
+    "retention_zero": "{task}：结果未落盘（零留存）。",
+    "retention_ephemeral": "{task}：结果随任务结束清除。",
+    "retention_user_owned": "{task}：结果保留在你自己的工作区。",
 }
 
 CATALOG["zh-Hant"] = {
@@ -161,6 +191,16 @@ CATALOG["zh-Hant"] = {
     "negotiation_converged": "我與 {peer} 已敲定 {start}，時長 {duration} 分鐘，正在發送邀請。",
     "negotiation_failed": "沒能和 {peer} 找到共同空檔：{reason}。需要我再提別的時間嗎？",
     "proposal_expired": "{start} 的「{title}」未在規定時間內確認，行事曆未做任何變動。",
+    "task_progress_title": "任務進度：{task}",
+    "task_progress_body": "{label} —— 第 {step}/{total} 步（{percent}%）。",
+    "task_approval_title": "需要核准：{task}",
+    "task_approval_body": "權限範圍：{capability} —— {scope}。在你核准前不會執行任何操作。",
+    "task_choice_title": "請選擇：{task}",
+    "task_choice_body": "{question} 選項：{options}。",
+    "task_result_title": "任務結果（{outcome}）：{task}",
+    "retention_zero": "{task}：結果未落盤（零留存）。",
+    "retention_ephemeral": "{task}：結果隨任務結束清除。",
+    "retention_user_owned": "{task}：結果保留在你自己的工作區。",
 }
 
 CATALOG["ja"] = {
@@ -185,6 +225,16 @@ CATALOG["ja"] = {
     "negotiation_converged": "{peer} と {start}（{duration} 分）で合意しました。招待をお送りします。",
     "negotiation_failed": "{peer} と都合の合う枠が見つかりませんでした：{reason}。別の時間を提案しましょうか？",
     "proposal_expired": "{start} の「{title}」は確認期限までに承認されなかったため、カレンダーは変更していません。",
+    "task_progress_title": "タスクの進捗：{task}",
+    "task_progress_body": "{label} — ステップ {step}/{total}（{percent}%）。",
+    "task_approval_title": "承認が必要です：{task}",
+    "task_approval_body": "権限の範囲：{capability} — {scope}。承認するまで何も実行されません。",
+    "task_choice_title": "選択してください：{task}",
+    "task_choice_body": "{question} 選択肢：{options}。",
+    "task_result_title": "タスクの結果（{outcome}）：{task}",
+    "retention_zero": "{task}：結果は保存されません（ゼロ保存）。",
+    "retention_ephemeral": "{task}：結果はタスク終了時に削除されます。",
+    "retention_user_owned": "{task}：結果はご自身のワークスペースに保持されます。",
 }
 
 CATALOG["ar"] = {
@@ -200,6 +250,16 @@ CATALOG["ar"] = {
     "negotiation_converged": "اتفقت أنا و{peer} على {start} لمدة {duration} دقيقة. أرسل الدعوة الآن.",
     "negotiation_failed": "لم أجد وقتًا يناسب {peer}: {reason}. هل أقترح وقتًا آخر؟",
     "proposal_expired": "{title} في {start} لم يُؤكد في الوقت المحدد، لذلك لم يُكتب شيء في التقويم.",
+    "task_progress_title": "تقدّم المهمة: {task}",
+    "task_progress_body": "{label} — الخطوة {step} من {total} ({percent}%).",
+    "task_approval_title": "مطلوب موافقة: {task}",
+    "task_approval_body": "نطاق الإذن: {capability} — {scope}. لا شيء يُنفَّذ قبل موافقتك.",
+    "task_choice_title": "اختر خيارًا: {task}",
+    "task_choice_body": "{question} الخيارات: {options}.",
+    "task_result_title": "نتيجة المهمة ({outcome}): {task}",
+    "retention_zero": "{task}: لم تُحفظ النتيجة (بدون احتفاظ).",
+    "retention_ephemeral": "{task}: تُحذف النتيجة عند انتهاء المهمة.",
+    "retention_user_owned": "{task}: تبقى النتيجة في مساحة عملك الخاصة.",
 }
 
 CATALOG["bg"] = {
@@ -226,6 +286,16 @@ CATALOG["bg"] = {
     "proposal_expired": (
         "{title} на {start} не беше потвърдено навреме, затова в календара не е записано нищо."
     ),
+    "task_progress_title": "Напредък на задачата: {task}",
+    "task_progress_body": "{label} — стъпка {step} от {total} ({percent}%).",
+    "task_approval_title": "Нужно е одобрение: {task}",
+    "task_approval_body": "Обхват на разрешението: {capability} — {scope}. Нищо не се изпълнява преди одобрението ви.",
+    "task_choice_title": "Изберете опция: {task}",
+    "task_choice_body": "{question} Опции: {options}.",
+    "task_result_title": "Резултат от задачата ({outcome}): {task}",
+    "retention_zero": "{task}: резултатът не е запазен (нулево съхранение).",
+    "retention_ephemeral": "{task}: резултатът се изтрива при приключване на задачата.",
+    "retention_user_owned": "{task}: резултатът остава в собственото ви работно пространство.",
 }
 
 CATALOG["cs"] = {
@@ -250,6 +320,16 @@ CATALOG["cs"] = {
     "negotiation_converged": "S {peer} jsme se dohodli na {start}, {duration} minut. Posílám pozvánku.",
     "negotiation_failed": "Nenašel jsem termín, který by vyhovoval i {peer}: {reason}. Nabídnout jiný čas?",
     "proposal_expired": "{title} na {start} nebylo včas potvrzeno, do kalendáře jsem nic nezapsal.",
+    "task_progress_title": "Průběh úlohy: {task}",
+    "task_progress_body": "{label} — krok {step} z {total} ({percent} %).",
+    "task_approval_title": "Je potřeba schválení: {task}",
+    "task_approval_body": "Rozsah oprávnění: {capability} — {scope}. Nic se nespustí, dokud neschválíte.",
+    "task_choice_title": "Vyberte možnost: {task}",
+    "task_choice_body": "{question} Možnosti: {options}.",
+    "task_result_title": "Výsledek úlohy ({outcome}): {task}",
+    "retention_zero": "{task}: výsledek nebyl uložen (nulové uchování).",
+    "retention_ephemeral": "{task}: výsledek se při ukončení úlohy smaže.",
+    "retention_user_owned": "{task}: výsledek zůstává ve vašem pracovním prostoru.",
 }
 
 CATALOG["de"] = {
@@ -274,6 +354,16 @@ CATALOG["de"] = {
     "negotiation_converged": "{peer} und ich haben {start} für {duration} Minuten vereinbart. Einladung geht raus.",
     "negotiation_failed": "Ich habe mit {peer} keinen passenden Termin gefunden: {reason}. Soll ich eine andere Zeit vorschlagen?",
     "proposal_expired": "{title} am {start} wurde nicht rechtzeitig bestätigt — der Kalender bleibt unverändert.",
+    "task_progress_title": "Aufgabenfortschritt: {task}",
+    "task_progress_body": "{label} — Schritt {step} von {total} ({percent} %).",
+    "task_approval_title": "Freigabe erforderlich: {task}",
+    "task_approval_body": "Berechtigungsumfang: {capability} — {scope}. Bis zur Freigabe wird nichts ausgeführt.",
+    "task_choice_title": "Option wählen: {task}",
+    "task_choice_body": "{question} Optionen: {options}.",
+    "task_result_title": "Aufgabenergebnis ({outcome}): {task}",
+    "retention_zero": "{task}: Das Ergebnis wurde nicht gespeichert (keine Aufbewahrung).",
+    "retention_ephemeral": "{task}: Das Ergebnis wird beim Ende der Aufgabe gelöscht.",
+    "retention_user_owned": "{task}: Das Ergebnis bleibt in Ihrem eigenen Arbeitsbereich.",
 }
 
 CATALOG["es"] = {
@@ -298,6 +388,16 @@ CATALOG["es"] = {
     "negotiation_converged": "{peer} y yo coincidimos en {start}, {duration} minutos. Envío la invitación.",
     "negotiation_failed": "No encontré un hueco común con {peer}: {reason}. ¿Propongo otra hora?",
     "proposal_expired": "{title} del {start} no se confirmó a tiempo, así que no toqué el calendario.",
+    "task_progress_title": "Progreso de la tarea: {task}",
+    "task_progress_body": "{label}: paso {step} de {total} ({percent} %).",
+    "task_approval_title": "Se necesita aprobación: {task}",
+    "task_approval_body": "Alcance del permiso: {capability} — {scope}. No se ejecuta nada hasta que apruebes.",
+    "task_choice_title": "Elige una opción: {task}",
+    "task_choice_body": "{question} Opciones: {options}.",
+    "task_result_title": "Resultado de la tarea ({outcome}): {task}",
+    "retention_zero": "{task}: el resultado no se guardó (retención cero).",
+    "retention_ephemeral": "{task}: el resultado se borra al terminar la tarea.",
+    "retention_user_owned": "{task}: el resultado permanece en tu propio espacio de trabajo.",
 }
 
 CATALOG["fi"] = {
@@ -322,6 +422,16 @@ CATALOG["fi"] = {
     "negotiation_converged": "{peer} kanssa päästiin yhteiseen aikaan {start}, kesto {duration} minuuttia. Lähetän kutsun.",
     "negotiation_failed": "En löytänyt {peer} kanssa sopivaa aikaa: {reason}. Ehdotanko toista aikaa?",
     "proposal_expired": "Ehdotusta {title} ({start}) ei vahvistettu määräajassa, joten kalenteriin ei kirjoitettu mitään.",
+    "task_progress_title": "Tehtävän edistyminen: {task}",
+    "task_progress_body": "{label} — vaihe {step}/{total} ({percent} %).",
+    "task_approval_title": "Hyväksyntä tarvitaan: {task}",
+    "task_approval_body": "Käyttöoikeuden laajuus: {capability} — {scope}. Mitään ei suoriteta ennen hyväksyntääsi.",
+    "task_choice_title": "Valitse vaihtoehto: {task}",
+    "task_choice_body": "{question} Vaihtoehdot: {options}.",
+    "task_result_title": "Tehtävän tulos ({outcome}): {task}",
+    "retention_zero": "{task}: tulosta ei tallennettu (nollasäilytys).",
+    "retention_ephemeral": "{task}: tulos poistetaan tehtävän päättyessä.",
+    "retention_user_owned": "{task}: tulos jää omaan työtilaan.",
 }
 
 CATALOG["fr"] = {
@@ -346,6 +456,16 @@ CATALOG["fr"] = {
     "negotiation_converged": "{peer} et moi avons convenu de {start} pour {duration} minutes. J'envoie l'invitation.",
     "negotiation_failed": "Impossible de trouver un créneau commun avec {peer} : {reason}. Je propose une autre heure ?",
     "proposal_expired": "{title} du {start} n'a pas été confirmé à temps, le calendrier reste inchangé.",
+    "task_progress_title": "Progression de la tâche : {task}",
+    "task_progress_body": "{label} — étape {step} sur {total} ({percent} %).",
+    "task_approval_title": "Approbation requise : {task}",
+    "task_approval_body": "Portée de l'autorisation : {capability} — {scope}. Rien n'est exécuté avant votre approbation.",
+    "task_choice_title": "Choisissez une option : {task}",
+    "task_choice_body": "{question} Options : {options}.",
+    "task_result_title": "Résultat de la tâche ({outcome}) : {task}",
+    "retention_zero": "{task} : le résultat n'a pas été conservé (aucune conservation).",
+    "retention_ephemeral": "{task} : le résultat est effacé à la fin de la tâche.",
+    "retention_user_owned": "{task} : le résultat reste dans votre propre espace de travail.",
 }
 
 CATALOG["hu"] = {
@@ -370,6 +490,16 @@ CATALOG["hu"] = {
     "negotiation_converged": "{peer} és én megegyeztünk: {start}, {duration} perc. Küldöm a meghívót.",
     "negotiation_failed": "Nem találtunk közös időpontot a partneremmel ({peer}): {reason}. Javasoljak másik időpontot?",
     "proposal_expired": "{title} {start} nem lett megerősítve időben, a naptárba nem írtam semmit.",
+    "task_progress_title": "Feladat előrehaladása: {task}",
+    "task_progress_body": "{label} — {step}. lépés / {total} ({percent} %).",
+    "task_approval_title": "Jóváhagyás szükséges: {task}",
+    "task_approval_body": "Engedély hatóköre: {capability} — {scope}. Jóváhagyásodig semmi nem fut.",
+    "task_choice_title": "Válassz egy lehetőséget: {task}",
+    "task_choice_body": "{question} Lehetőségek: {options}.",
+    "task_result_title": "Feladat eredménye ({outcome}): {task}",
+    "retention_zero": "{task}: az eredmény nem került mentésre (nulla megtartás).",
+    "retention_ephemeral": "{task}: az eredmény a feladat végén törlődik.",
+    "retention_user_owned": "{task}: az eredmény a saját munkaterületedben marad.",
 }
 
 CATALOG["it"] = {
@@ -394,6 +524,16 @@ CATALOG["it"] = {
     "negotiation_converged": "Io e {peer} abbiamo concordato {start}, {duration} minuti. Invio l'invito.",
     "negotiation_failed": "Non ho trovato un orario comune con {peer}: {reason}. Propongo un altro momento?",
     "proposal_expired": "{title} del {start} non è stato confermato in tempo, il calendario è rimasto invariato.",
+    "task_progress_title": "Avanzamento dell'attività: {task}",
+    "task_progress_body": "{label} — passo {step} di {total} ({percent}%).",
+    "task_approval_title": "Approvazione necessaria: {task}",
+    "task_approval_body": "Ambito del permesso: {capability} — {scope}. Nulla viene eseguito prima dell'approvazione.",
+    "task_choice_title": "Scegli un'opzione: {task}",
+    "task_choice_body": "{question} Opzioni: {options}.",
+    "task_result_title": "Risultato dell'attività ({outcome}): {task}",
+    "retention_zero": "{task}: il risultato non è stato salvato (conservazione zero).",
+    "retention_ephemeral": "{task}: il risultato viene cancellato al termine dell'attività.",
+    "retention_user_owned": "{task}: il risultato resta nel tuo spazio di lavoro.",
 }
 
 CATALOG["ko"] = {
@@ -409,6 +549,16 @@ CATALOG["ko"] = {
     "negotiation_converged": "{peer}님과 {start}에 {duration}분으로 합의했습니다. 지금 초대를 보냅니다.",
     "negotiation_failed": "{peer}님과 맞는 시간을 찾지 못했습니다: {reason}. 다른 시간을 제안할까요?",
     "proposal_expired": "{start}의 {title}이(가) 제때 확인되지 않아 캘린더에는 아무것도 기록되지 않았습니다.",
+    "task_progress_title": "작업 진행 상황: {task}",
+    "task_progress_body": "{label} — {step}/{total}단계 ({percent}%).",
+    "task_approval_title": "승인이 필요합니다: {task}",
+    "task_approval_body": "권한 범위: {capability} — {scope}. 승인 전에는 아무것도 실행되지 않습니다.",
+    "task_choice_title": "옵션을 선택하세요: {task}",
+    "task_choice_body": "{question} 선택지: {options}.",
+    "task_result_title": "작업 결과({outcome}): {task}",
+    "retention_zero": "{task}: 결과가 저장되지 않았습니다(무보존).",
+    "retention_ephemeral": "{task}: 작업이 끝나면 결과가 삭제됩니다.",
+    "retention_user_owned": "{task}: 결과가 내 작업 공간에 유지됩니다.",
 }
 
 CATALOG["nl"] = {
@@ -433,6 +583,16 @@ CATALOG["nl"] = {
     "negotiation_converged": "{peer} en ik hebben {start} afgesproken voor {duration} minuten. Ik stuur de uitnodiging.",
     "negotiation_failed": "Ik vond geen passend moment met {peer}: {reason}. Zal ik een andere tijd voorstellen?",
     "proposal_expired": "{title} op {start} is niet op tijd bevestigd, dus de agenda is onveranderd.",
+    "task_progress_title": "Taakvoortgang: {task}",
+    "task_progress_body": "{label} — stap {step} van {total} ({percent} %).",
+    "task_approval_title": "Goedkeuring nodig: {task}",
+    "task_approval_body": "Machtigingsbereik: {capability} — {scope}. Er wordt niets uitgevoerd tot je goedkeurt.",
+    "task_choice_title": "Kies een optie: {task}",
+    "task_choice_body": "{question} Opties: {options}.",
+    "task_result_title": "Taakresultaat ({outcome}): {task}",
+    "retention_zero": "{task}: het resultaat is niet opgeslagen (geen bewaring).",
+    "retention_ephemeral": "{task}: het resultaat wordt gewist wanneer de taak eindigt.",
+    "retention_user_owned": "{task}: het resultaat blijft in je eigen werkruimte.",
 }
 
 CATALOG["pl"] = {
@@ -457,6 +617,16 @@ CATALOG["pl"] = {
     "negotiation_converged": "Z {peer} ustaliliśmy {start} na {duration} minut. Wysyłam zaproszenie.",
     "negotiation_failed": "Nie znalazłem wspólnego terminu z {peer}: {reason}. Proponować inną godzinę?",
     "proposal_expired": "{title} {start} nie zostało potwierdzone na czas, więc w kalendarzu nic nie zapisałem.",
+    "task_progress_title": "Postęp zadania: {task}",
+    "task_progress_body": "{label} — krok {step} z {total} ({percent}%).",
+    "task_approval_title": "Wymagana zgoda: {task}",
+    "task_approval_body": "Zakres uprawnień: {capability} — {scope}. Nic nie zostanie wykonane bez Twojej zgody.",
+    "task_choice_title": "Wybierz opcję: {task}",
+    "task_choice_body": "{question} Opcje: {options}.",
+    "task_result_title": "Wynik zadania ({outcome}): {task}",
+    "retention_zero": "{task}: wynik nie został zapisany (zerowe przechowywanie).",
+    "retention_ephemeral": "{task}: wynik jest usuwany po zakończeniu zadania.",
+    "retention_user_owned": "{task}: wynik pozostaje w Twojej przestrzeni roboczej.",
 }
 
 CATALOG["pt-BR"] = {
@@ -472,6 +642,16 @@ CATALOG["pt-BR"] = {
     "negotiation_converged": "{peer} e eu chegamos a um acordo em {start}, por {duration} minutos. Enviando o convite agora.",
     "negotiation_failed": "Não encontrei um horário que funcione com {peer}: {reason}. Quer que eu proponha outro horário?",
     "proposal_expired": "{title} em {start} não foi confirmado a tempo, então nada foi gravado na agenda.",
+    "task_progress_title": "Progresso da tarefa: {task}",
+    "task_progress_body": "{label} — etapa {step} de {total} ({percent}%).",
+    "task_approval_title": "Aprovação necessária: {task}",
+    "task_approval_body": "Escopo da permissão: {capability} — {scope}. Nada é executado antes da sua aprovação.",
+    "task_choice_title": "Escolha uma opção: {task}",
+    "task_choice_body": "{question} Opções: {options}.",
+    "task_result_title": "Resultado da tarefa ({outcome}): {task}",
+    "retention_zero": "{task}: o resultado não foi armazenado (retenção zero).",
+    "retention_ephemeral": "{task}: o resultado é apagado quando a tarefa termina.",
+    "retention_user_owned": "{task}: o resultado permanece no seu próprio espaço de trabalho.",
 }
 
 CATALOG["ru"] = {
@@ -496,6 +676,16 @@ CATALOG["ru"] = {
     "negotiation_converged": "Мы с {peer} договорились на {start}, {duration} минут. Отправляю приглашение.",
     "negotiation_failed": "Не удалось найти удобное время с {peer}: {reason}. Предложить другой слот?",
     "proposal_expired": "{title} на {start} не подтверждено вовремя — в календарь ничего не записано.",
+    "task_progress_title": "Ход задачи: {task}",
+    "task_progress_body": "{label} — шаг {step} из {total} ({percent}%).",
+    "task_approval_title": "Требуется одобрение: {task}",
+    "task_approval_body": "Объём разрешения: {capability} — {scope}. Ничего не выполняется до вашего одобрения.",
+    "task_choice_title": "Выберите вариант: {task}",
+    "task_choice_body": "{question} Варианты: {options}.",
+    "task_result_title": "Результат задачи ({outcome}): {task}",
+    "retention_zero": "{task}: результат не сохранён (нулевое хранение).",
+    "retention_ephemeral": "{task}: результат удаляется по завершении задачи.",
+    "retention_user_owned": "{task}: результат остаётся в вашем рабочем пространстве.",
 }
 
 CATALOG["th"] = {
@@ -515,6 +705,16 @@ CATALOG["th"] = {
     "negotiation_converged": "ตกลงกับ {peer} ได้ที่เวลา {start} นาน {duration} นาที กำลังส่งคำเชิญ",
     "negotiation_failed": "หาเวลาตรงกับ {peer} ไม่สำเร็จ: {reason} ให้เสนอเวลาอื่นไหม?",
     "proposal_expired": "{title} วันที่ {start} ไม่ได้รับการยืนยันภายในกำหนด จึงไม่ได้แก้ไขปฏิทิน",
+    "task_progress_title": "ความคืบหน้าของงาน: {task}",
+    "task_progress_body": "{label} — ขั้นที่ {step}/{total} ({percent}%)",
+    "task_approval_title": "ต้องได้รับการอนุมัติ: {task}",
+    "task_approval_body": "ขอบเขตสิทธิ์: {capability} — {scope} จะไม่มีการดำเนินการใด ๆ ก่อนคุณอนุมัติ",
+    "task_choice_title": "เลือกตัวเลือก: {task}",
+    "task_choice_body": "{question} ตัวเลือก: {options}",
+    "task_result_title": "ผลลัพธ์ของงาน ({outcome}): {task}",
+    "retention_zero": "{task}: ไม่ได้จัดเก็บผลลัพธ์ (ไม่เก็บเลย)",
+    "retention_ephemeral": "{task}: ผลลัพธ์จะถูกลบเมื่องานสิ้นสุด",
+    "retention_user_owned": "{task}: ผลลัพธ์ยังอยู่ในพื้นที่ทำงานของคุณเอง",
 }
 
 CATALOG["tr"] = {
@@ -539,6 +739,16 @@ CATALOG["tr"] = {
     "negotiation_converged": "{peer} ile {start}, {duration} dakika üzerinde anlaştık. Daveti gönderiyorum.",
     "negotiation_failed": "{peer} ile ortak bir zaman bulamadım: {reason}. Başka bir saat önereyim mi?",
     "proposal_expired": "{title}, {start} için zamanında onaylanmadı, takvime hiçbir şey yazılmadı.",
+    "task_progress_title": "Görev ilerlemesi: {task}",
+    "task_progress_body": "{label} — {total} adımın {step}. adımı (%{percent}).",
+    "task_approval_title": "Onay gerekli: {task}",
+    "task_approval_body": "İzin kapsamı: {capability} — {scope}. Onayınızdan önce hiçbir şey çalışmaz.",
+    "task_choice_title": "Bir seçenek seçin: {task}",
+    "task_choice_body": "{question} Seçenekler: {options}.",
+    "task_result_title": "Görev sonucu ({outcome}): {task}",
+    "retention_zero": "{task}: sonuç kaydedilmedi (sıfır saklama).",
+    "retention_ephemeral": "{task}: sonuç görev bitince silinir.",
+    "retention_user_owned": "{task}: sonuç kendi çalışma alanınızda kalır.",
 }
 
 CATALOG["uk"] = {
@@ -563,6 +773,16 @@ CATALOG["uk"] = {
     "negotiation_converged": "Ми з {peer} домовилися на {start}, {duration} хвилин. Надсилаю запрошення.",
     "negotiation_failed": "Не вдалося знайти спільний час з {peer}: {reason}. Запропонувати інший слот?",
     "proposal_expired": "{title} на {start} не підтверджено вчасно — у календар нічого не записано.",
+    "task_progress_title": "Поступ завдання: {task}",
+    "task_progress_body": "{label} — крок {step} з {total} ({percent} %).",
+    "task_approval_title": "Потрібне схвалення: {task}",
+    "task_approval_body": "Обсяг дозволу: {capability} — {scope}. Нічого не виконується до вашого схвалення.",
+    "task_choice_title": "Виберіть варіант: {task}",
+    "task_choice_body": "{question} Варіанти: {options}.",
+    "task_result_title": "Результат завдання ({outcome}): {task}",
+    "retention_zero": "{task}: результат не збережено (нульове збереження).",
+    "retention_ephemeral": "{task}: результат видаляється після завершення завдання.",
+    "retention_user_owned": "{task}: результат залишається у вашому робочому просторі.",
 }
 
 
